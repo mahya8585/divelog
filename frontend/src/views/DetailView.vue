@@ -26,6 +26,9 @@
         <div>
           <h5 class="mb-1">{{ formatDt(dive.dive_info.datetime) }}</h5>
           <div class="text-muted small">
+            <i class="bi bi-clock me-1"></i>終了 {{ endTime }}
+          </div>
+          <div class="text-muted small">
             <i class="bi bi-geo-alt-fill me-1"></i>{{ dive.location?.name || '—' }}
           </div>
           <div class="text-warning">{{ stars(dive.dive_info.rating) }}</div>
@@ -176,6 +179,15 @@ function fmtNum(val, digits = 0) {
   if (val == null || val === '') return '—'
   return Number(val).toFixed(digits)
 }
+
+const endTime = computed(() => {
+  if (!dive.value?.dive_info?.datetime || !dive.value?.dive_info?.dive_time_min) return '—'
+  const start = new Date(dive.value.dive_info.datetime)
+  const end   = new Date(start.getTime() + dive.value.dive_info.dive_time_min * 60 * 1000)
+  const hh = String(end.getHours()).padStart(2, '0')
+  const mm = String(end.getMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+})
 
 // ── ギア行定義 ────────────────────────────────────────
 const gearRows = [

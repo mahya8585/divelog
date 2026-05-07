@@ -39,7 +39,7 @@ body {
 }
 
 /* ── マップ ──────────────────────────────────────────── */
-.map-container    { height: 340px; }
+.map-container    { height: 480px; }
 .map-container-sm { height: 220px; }
 
 /* ── 検索カード ──────────────────────────────────────── */
