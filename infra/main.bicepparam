@@ -20,7 +20,7 @@ param appName = 'divelog'
 // ACR にイメージを push した後に本番イメージへ更新してください。
 //
 // 例: param backendImage = 'acrdivelog.azurecr.io/divelog-backend:latest'
-param backendImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+param backendImage = 'acrdivelog.azurecr.io/backend:latest'
 
 // ── スケール設定 ──────────────────────────────────────────
 param backendMaxReplicas = 3

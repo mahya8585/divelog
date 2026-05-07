@@ -21,7 +21,7 @@ COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "dives")
 
 
 def _use_cosmos() -> bool:
-    return bool(COSMOS_ENDPOINT and COSMOS_KEY)
+    return bool(COSMOS_ENDPOINT)
 
 
 # ── JSON ファイルから読み込む ──────────────────────────────
@@ -50,7 +50,11 @@ def _load_one_from_json(dive_id: str) -> dict:
 
 def _get_container():
     from azure.cosmos import CosmosClient
-    client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+    if COSMOS_KEY:
+        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+    else:
+        from azure.identity import DefaultAzureCredential
+        client = CosmosClient(COSMOS_ENDPOINT, credential=DefaultAzureCredential())
     return (
         client
         .get_database_client(COSMOS_DATABASE)

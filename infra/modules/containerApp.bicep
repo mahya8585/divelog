@@ -1,9 +1,10 @@
-/*
+﻿/*
   Azure Container Apps モジュール（バックエンド Flask API）
-  - システム割り当てマネージド ID で ACR から AcrPull
+  - ユーザー割り当てマネージド ID で ACR から AcrPull
+    （システム割り当てだと ID 作成→ロール付与→CA作成の循環依存が生じるため）
   - HTTP ingress で外部公開
-  - スケールトゥゼロ有効（15 分間アクセスなしでゼロレプリカへ）
-  - Cosmos DB キーは Key Vault シークレット参照で取得
+  - スケールトゥゼロ有効
+  - Cosmos DB は Entra ID (RBAC) 認証で接続
 */
 
 param name               string
@@ -22,21 +23,36 @@ param allowedOrigins string = '*'
 @description('Cosmos DB エンドポイント')
 param cosmosEndpoint string
 
-@description('Key Vault URI（シークレット参照に使用）')
-param keyVaultUri string
-
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
-// Cosmos DB キー → Key Vault シークレット参照の URL
-var cosmosKeySecretUrl = '${keyVaultUri}secrets/cosmos-key'
+// ① ユーザー割り当てマネージド ID（Container App より先に作成可能）
+resource uaMI 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name    : '${name}-id'
+  location: location
+}
 
-// Container App 本体
+// ② AcrPull ロール付与（ユーザー割り当て ID → ACR）
+//    Container App 作成前に完了するため循環依存なし
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name : guid(uaMI.id, acrId, acrPullRoleId)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalId     : uaMI.properties.principalId
+    principalType   : 'ServicePrincipal'
+  }
+}
+
+// ③ Container App 本体（ロール付与完了後に作成）
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name    : name
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${uaMI.id}': {}
+    }
   }
   properties: {
     managedEnvironmentId: containerAppsEnvId
@@ -55,17 +71,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server  : acrLoginServer
-          identity: 'system'
+          identity: uaMI.id
         }
       ]
-      // Key Vault シークレット参照（マネージド ID で取得）
-      secrets: [
-        {
-          name        : 'cosmos-key'
-          keyVaultUrl : cosmosKeySecretUrl
-          identity    : 'system'
-        }
-      ]
+      secrets: []
     }
     template: {
       containers: [
@@ -81,15 +90,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'FLASK_DEBUG',     value: 'false' }
             { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
             { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
-            { name: 'COSMOS_KEY',      secretRef: 'cosmos-key' }  // Key Vault 経由
+            { name: 'AZURE_CLIENT_ID', value: uaMI.properties.clientId }
           ]
         }
       ]
       scale: {
-        minReplicas: 0           // スケールトゥゼロ有効
+        minReplicas: 0
         maxReplicas: maxReplicas
-        // HTTP スケールルール: リクエストがなくなると約 15 分でゼロレプリカへ
-        // concurrentRequests=1 にすることでアイドル検知を敏感にする
         rules: [
           {
             name: 'http-scaling'
@@ -103,18 +110,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
+  dependsOn: [acrPullAssignment]
 }
 
-// システム割り当て ID に AcrPull ロールを付与
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name : guid(containerApp.id, acrId, acrPullRoleId)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId     : containerApp.identity.principalId
-    principalType   : 'ServicePrincipal'
-  }
-}
-
-output fqdn       string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
-output principalId string = containerApp.identity.principalId
+output fqdn        string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
+output principalId string = uaMI.properties.principalId
+output uaMIId      string = uaMI.id

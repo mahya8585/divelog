@@ -78,7 +78,7 @@ module kv 'modules/keyVault.bicep' = {
 }
 
 // 5. Azure Container Apps (バックエンド)
-//    Key Vault シークレット参照 → マネージド ID で安全に取得
+//    Cosmos DB は Entra ID (RBAC) 認証で接続
 module backend 'modules/containerApp.bicep' = {
   name: 'backend'
   params: {
@@ -90,27 +90,10 @@ module backend 'modules/containerApp.bicep' = {
     acrId             : acr.outputs.acrId
     maxReplicas       : backendMaxReplicas
     cosmosEndpoint    : cosmos.outputs.endpoint
-    keyVaultUri       : kv.outputs.vaultUri
   }
 }
 
-// 6. Key Vault Secrets User ロール割り当て
-//    Container App のマネージド ID が Cosmos Key を読み取れるように付与
-var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e0'
-resource existingKv 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-  name: kvName
-}
-resource kvAccessForBackend 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name : guid(existingKv.id, backend.outputs.principalId, kvSecretsUserRoleId)
-  scope: existingKv
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
-    principalId     : backend.outputs.principalId
-    principalType   : 'ServicePrincipal'
-  }
-}
-
-// 7. Azure Static Web Apps (フロントエンド) Free
+// 6. Azure Static Web Apps (フロントエンド) Free
 module frontend 'modules/staticWebApp.bicep' = {
   name: 'frontend'
   params: {

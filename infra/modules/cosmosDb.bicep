@@ -29,6 +29,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
       defaultConsistencyLevel: 'Session'
     }
     enableFreeTier          : false
+    disableLocalAuth        : false    // キーベース認証を許可
     publicNetworkAccess     : 'Enabled'
     disableKeyBasedMetadataWriteAccess: false
   }
