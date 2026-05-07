@@ -4,7 +4,7 @@
 
 - [Azure CLI](https://learn.microsoft.com/ja-jp/cli/azure/install-azure-cli) (`az`)
 - [Azure Developer CLI](https://learn.microsoft.com/ja-jp/azure/developer/azure-developer-cli/install-azd) (`azd`)
-- Docker Desktop
+- (オプション) Docker Desktop — ACR ビルドを使う場合は不要
 
 ---
 
@@ -47,20 +47,19 @@ azd up
 
 ## 3. バックエンドイメージのビルド & プッシュ
 
-プロビジョニング後に ACR ログインサーバーを取得してイメージをプッシュします。
+プロビジョニング後に ACR タスクでイメージをビルドします（Docker Desktop 不要）。
 
 ```bash
-# ACR ログインサーバーを取得
-ACR_SERVER=$(az deployment group show \
-  -g rg-divelogsite -n main \
-  --query properties.outputs.acrLoginServer.value -o tsv)
+# プロジェクトルートから ACR ビルド
+az acr build --registry acrdivelog --image backend:latest --file backend/Dockerfile .
+```
 
-# ACR にログイン（マネージド ID ではなく CLI 認証で行う）
+ローカルで Docker を使う場合:
+
+```bash
 az acr login --name acrdivelog
-
-# プロジェクトルートからビルド & プッシュ
-docker build -f backend/Dockerfile -t ${ACR_SERVER}/divelog-backend:latest .
-docker push ${ACR_SERVER}/divelog-backend:latest
+docker build -f backend/Dockerfile -t acrdivelog.azurecr.io/backend:latest .
+docker push acrdivelog.azurecr.io/backend:latest
 ```
 
 ---
@@ -70,7 +69,7 @@ docker push ${ACR_SERVER}/divelog-backend:latest
 `infra/main.bicepparam` の `backendImage` を更新します:
 
 ```bicep
-param backendImage = 'acrdivelog.azurecr.io/divelog-backend:latest'
+param backendImage = 'acrdivelog.azurecr.io/backend:latest'
 ```
 
 再デプロイ:

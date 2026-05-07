@@ -11,15 +11,16 @@
 ┌────────────────────────▼─────────────────────────────────┐
 │  Flask REST API (Azure Container Apps / Consumption)     │
 │  - ゼロスケール対応（アイドル 15 分でコンテナ停止）       │
-│  - システム割り当てマネージド ID                          │
+│  - ユーザー割り当てマネージド ID (ca-divelog-id)          │
 │    ├─ ACR へのイメージ Pull (AcrPull ロール)              │
-│    └─ Key Vault のシークレット参照 (Secrets User ロール)  │
-└──────────┬─────────────────────────┬──────────────────────┘
-           │                         │
-┌──────────▼──────────┐  ┌───────────▼───────────────────┐
-│  Azure Cosmos DB    │  │  Azure Key Vault              │
-│  (Serverless/NoSQL) │  │  - cosmos-key シークレット格納 │
-└─────────────────────┘  └───────────────────────────────┘
+│    └─ Cosmos DB への RBAC アクセス (Data Contributor)     │
+└──────────┬───────────────────────────────────────────────┘
+           │ Entra ID (DefaultAzureCredential)
+┌──────────▼──────────┐
+│  Azure Cosmos DB    │
+│  (Serverless/NoSQL) │
+│  disableLocalAuth   │
+└─────────────────────┘
            ▲
 ┌──────────┴──────────┐
 │  Azure Container    │
@@ -36,8 +37,8 @@
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
 | Azure Container Apps | Consumption (ゼロスケール) | Flask API ホスティング |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
-| Azure Cosmos DB | Serverless | ダイブログデータ永続化 |
-| Azure Key Vault | Standard (RBAC モード) | Cosmos DB キーのシークレット管理 |
+| Azure Cosmos DB | Serverless | ダイブログデータ永続化（Entra ID RBAC 認証） |
+| Azure Key Vault | Standard (RBAC モード) | 将来のシークレット管理用（現在 Cosmos DB は RBAC 認証） |
 | Log Analytics Workspace | PerGB2018 (30 日保持) | Container Apps ログ収集 |
 
 **リソースグループ**: `rg-divelogsite`
@@ -117,9 +118,10 @@ npm でインストールしているライブラリ:
 
 ### 認証・認可
 
-- **マネージド ID**: Container Apps はシステム割り当てマネージド ID を使用。パスワードレスで ACR 認証・Key Vault アクセスを行う
-- **Key Vault RBAC**: `Key Vault Secrets User` ロールを Container App のプリンシパル ID に対して Key Vault スコープで付与
-- **AcrPull**: `AcrPull` ロールをリソースグループスコープで付与し、イメージ Pull を許可
+- **マネージド ID**: Container Apps はユーザー割り当てマネージド ID (`ca-divelog-id`) を使用。パスワードレスで ACR 認証・Cosmos DB アクセスを行う
+- **Cosmos DB RBAC**: `Cosmos DB Built-in Data Contributor` ロール (`00000000-0000-0000-0000-000000000002`) をマネージド ID のプリンシパル ID に対して付与
+- **AcrPull**: `AcrPull` ロールを ACR スコープで付与し、イメージ Pull を許可
+- **disableLocalAuth**: サブスクリプションポリシーにより Cosmos DB のキーベース認証は無効化されており、Entra ID 認証のみ使用可能
 
 ### アプリケーションセキュリティ
 
@@ -129,5 +131,6 @@ npm でインストールしているライブラリ:
 
 ### シークレット管理
 
-- Cosmos DB 主キーはコードや環境変数に直接記述せず、Key Vault シークレット参照で Container Apps に注入
-- `COSMOS_KEY` は Container Apps の `secrets` セクションで `keyVaultUrl` 参照として定義
+- Cosmos DB へのアクセスはマネージド ID による Entra ID 認証を使用し、キーやシークレットは不要
+- `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID のクライアント ID を指定し、`DefaultAzureCredential` が適切な ID を選択
+- Key Vault は将来的なシークレット管理用に存在するが、現在 Cosmos DB 接続にはキーを使用しない

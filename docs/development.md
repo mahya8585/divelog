@@ -32,8 +32,11 @@ python app.py
 
 ### データソース
 
-`COSMOS_ENDPOINT` と `COSMOS_KEY` の両方が設定されている場合は Cosmos DB を使用します。  
-どちらかが未設定の場合は `workflow/json/` の JSON ファイルをフォールバックとして使用します。
+`COSMOS_ENDPOINT` が設定されている場合は Cosmos DB を使用します（認証は `DefaultAzureCredential` を使用）。  
+ローカル開発時に `COSMOS_KEY` も設定されている場合はキーベース認証にフォールバックします。  
+`COSMOS_ENDPOINT` が未設定の場合は `workflow/json/` の JSON ファイルをフォールバックとして使用します。
+
+> **Note**: Azure 上では `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID を指定し、Entra ID (RBAC) 認証で Cosmos DB に接続します。
 
 ---
 
