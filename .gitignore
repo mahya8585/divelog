@@ -210,3 +210,6 @@ __marimo__/
 workflow/json/*.json
 workflow/zxu/
 .idea/
+
+# node_modules/ はフロントエンドの依存関係であり、gitで管理しない
+frontend/node_modules/

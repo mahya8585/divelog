@@ -1,0 +1,8 @@
+# Web フレームワーク
+flask
+flask-cors
+python-dotenv
+gunicorn
+
+# Azure Cosmos DB（オプション: JSON フォールバックを使う場合は不要）
+azure-cosmos

@@ -1,2 +1,9 @@
 xmltodict
 streamlit
+
+# Web (Flask)
+flask
+python-dotenv
+
+# Azure Cosmos DB (オプション: JSON フォールバックを使う場合は不要)
+azure-cosmos

@@ -1,0 +1,28 @@
+# azure.yaml — Azure Developer CLI (azd) 設定
+# 使用方法:
+#   azd init   (初回)
+#   azd up     (プロビジョニング + デプロイ)
+#   azd deploy (コード変更時のみ再デプロイ)
+
+name: divelog
+
+# IaC プロバイダー
+infra:
+  provider: bicep
+  path: infra
+
+services:
+  # ── バックエンド: Flask API → Azure Container Apps ──────
+  backend:
+    project: ./backend
+    host: containerapp
+    language: python
+    docker:
+      path: ./backend/Dockerfile
+      context: .          # プロジェクトルートを context にする (workflow/json/ コピーのため)
+
+  # ── フロントエンド: Vue.js → Azure Static Web Apps ──────
+  frontend:
+    project: ./frontend
+    host: staticwebapp
+    language: js
