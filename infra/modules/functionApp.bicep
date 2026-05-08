@@ -231,3 +231,4 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
 output functionAppName string = functionApp.name
 output principalId string = uaMI.properties.principalId
 output uaMIId string = uaMI.id
+output appInsightsConnectionString string = appInsights.properties.ConnectionString

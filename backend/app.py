@@ -44,6 +44,8 @@ try:
 except ImportError:
     pass
 
+from logging_config import configure_logging
+
 from data import (
     _use_cosmos,
     delete_token,
@@ -67,6 +69,9 @@ except ImportError:
 _DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
 app = Flask(__name__)
+
+# Application Insights / ログ設定（WARNING 以上のみ収集、統一フォーマット）
+configure_logging(app)
 
 # ── プロキシ配下（Container Apps / SWA Front Door）の X-Forwarded-* を信頼 ──
 _TRUST_PROXY_HOPS = int(os.environ.get("TRUST_PROXY_HOPS", "1"))

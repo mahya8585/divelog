@@ -9,6 +9,18 @@ import azure.functions as func
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
 
+# ── ログ設定（WARNING 以上のみ収集、統一フォーマット）────────
+# Azure Functions ホストが Application Insights へ転送するため
+# ここでは Python ロギングのフォーマットとレベルのみ設定する。
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
+logging.basicConfig(
+    level=logging.WARNING,
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATE_FORMAT,
+)
+logging.getLogger().setLevel(logging.WARNING)
+
 # Functions パッケージ内に同梱された convert_zxu_to_json を優先。
 # ローカル開発時はリポジトリの workflow/ パッケージから解決。
 _here = Path(__file__).resolve().parent

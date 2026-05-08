@@ -105,19 +105,20 @@ module frontend 'modules/staticWebApp.bicep' = {
 module backend 'modules/containerApp.bicep' = {
   name: 'backend'
   params: {
-    name                  : backendName
-    location              : location
-    containerAppsEnvId    : caEnv.outputs.envId
-    image                 : backendImage
-    acrLoginServer        : acr.outputs.loginServer
-    acrId                 : acr.outputs.acrId
-    maxReplicas           : backendMaxReplicas
-    minReplicas           : backendMinReplicas
-    allowedOrigins        : frontend.outputs.url
-    cosmosEndpoint        : cosmos.outputs.endpoint
-    cosmosDatabaseName    : cosmos.outputs.databaseName
-    cosmosZxuContainerName: cosmos.outputs.zxuContainerName
-    secretKey             : secretKey
+    name                        : backendName
+    location                    : location
+    containerAppsEnvId          : caEnv.outputs.envId
+    image                       : backendImage
+    acrLoginServer              : acr.outputs.loginServer
+    acrId                       : acr.outputs.acrId
+    maxReplicas                 : backendMaxReplicas
+    minReplicas                 : backendMinReplicas
+    allowedOrigins              : frontend.outputs.url
+    cosmosEndpoint              : cosmos.outputs.endpoint
+    cosmosDatabaseName          : cosmos.outputs.databaseName
+    cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
+    secretKey                   : secretKey
+    appInsightsConnectionString : functions.outputs.appInsightsConnectionString
   }
 }
 
@@ -165,6 +166,15 @@ module cosmosFunctionsRole 'modules/cosmosRoleAssignment.bicep' = {
     cosmosAccountName     : cosmos.outputs.accountName
     principalId           : functions.outputs.principalId
     roleAssignmentNameSeed: 'functions'
+  }
+}
+
+// 11. Cosmos DB 診断設定（DataPlane / ControlPlane ログを Log Analytics へ転送）
+module cosmosDiagnostics 'modules/cosmosDiagnostics.bicep' = {
+  name: 'cosmos-diagnostics'
+  params: {
+    cosmosAccountName     : cosmos.outputs.accountName
+    logAnalyticsWorkspaceId: caEnv.outputs.logAnalyticsWorkspaceId
   }
 }
 
