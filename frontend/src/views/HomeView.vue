@@ -55,6 +55,9 @@
     <!-- ローディング -->
     <div v-if="loading" class="text-center py-5">
       <div class="spinner-border text-primary" role="status"></div>
+      <div class="mt-2 text-muted small">
+        <i class="bi bi-arrow-repeat me-1"></i>データ取得中
+      </div>
     </div>
 
     <!-- エラー -->
