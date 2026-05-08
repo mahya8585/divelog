@@ -7,15 +7,25 @@
 │  ブラウザ                                                 │
 │  Vue 3 SPA (Azure Static Web Apps / Free)                │
 └────────────────────────┬─────────────────────────────────┘
-                         │ HTTPS /api/*
+                         │ HTTPS (VITE_API_BASE_URL)
 ┌────────────────────────▼─────────────────────────────────┐
-│  Flask REST API (Azure Container Apps / Consumption)     │
-│  - ゼロスケール対応（アイドル 15 分でコンテナ停止）       │
-│  - ユーザー割り当てマネージド ID (ca-divelog-id)          │
-│    ├─ ACR へのイメージ Pull (AcrPull ロール)              │
-│    └─ Cosmos DB への RBAC アクセス (Data Contributor)     │
+│  Azure VNet (10.0.0.0/16)                                │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │ container-apps-subnet (10.0.0.0/23)                 │ │
+│  │  Flask REST API (Azure Container Apps / Consumption)│ │
+│  │  - VNet 統合 (workloadProfiles: Consumption)        │ │
+│  │  - ゼロスケール対応                                  │ │
+│  │  - ユーザー割り当てマネージド ID (ca-divelog-id)     │ │
+│  │    ├─ ACR へのイメージ Pull (AcrPull ロール)         │ │
+│  │    └─ Cosmos DB への RBAC アクセス (Data Contributor)│ │
+│  └─────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │ private-endpoints-subnet (10.0.2.0/24)              │ │
+│  │  Private Endpoint → Cosmos DB (groupId: Sql)        │ │
+│  │  Private DNS Zone: privatelink.documents.azure.com  │ │
+│  └─────────────────────────────────────────────────────┘ │
 └──────────┬───────────────────────────────────────────────┘
-           │ Entra ID (DefaultAzureCredential)
+           │ Private Endpoint + Entra ID (DefaultAzureCredential)
 ┌──────────▼──────────┐
 │  Azure Cosmos DB    │
 │  (Serverless/NoSQL) │
@@ -23,6 +33,8 @@
 │  ├─ users  コンテナ │
 │  └─ tokens コンテナ │
 │  disableLocalAuth   │
+│  publicNetworkAccess│
+│    = Disabled       │
 └─────────────────────┘
            ▲
 ┌──────────┴──────────┐
@@ -38,9 +50,12 @@
 | リソース | SKU | 用途 |
 |---|---|---|
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
-| Azure Container Apps | Consumption (ゼロスケール) | Flask API ホスティング |
+| Azure Container Apps | Consumption (ゼロスケール, VNet 統合) | Flask API ホスティング |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
 | Azure Cosmos DB | Serverless | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理 |
+| Azure Virtual Network | — | Container Apps + Private Endpoint のネットワーク分離 |
+| Azure Private Endpoint | — | Cosmos DB へのプライベート接続 (groupId: Sql) |
+| Azure Private DNS Zone | — | `privatelink.documents.azure.com` の名前解決 |
 | Azure Key Vault | Standard (RBAC モード) | 将来のシークレット管理用（現在 Cosmos DB は RBAC 認証） |
 | Log Analytics Workspace | PerGB2018 (30 日保持) | Container Apps ログ収集 |
 
@@ -82,10 +97,11 @@ divelog/
 │   ├── main.bicepparam         # デプロイパラメータ
 │   └── modules/
 │       ├── containerRegistry.bicep   # ACR (Basic)
-│       ├── containerAppsEnv.bicep    # Log Analytics + CA 環境
+│       ├── containerAppsEnv.bicep    # Log Analytics + CA 環境 (VNet 統合対応)
 │       ├── containerApp.bicep        # Container Apps (Flask API)
 │       ├── staticWebApp.bicep        # Static Web Apps (Vue.js / Free)
-│       ├── cosmosDb.bicep            # Cosmos DB Serverless
+│       ├── cosmosDb.bicep            # Cosmos DB Serverless (publicNetworkAccess: Disabled)
+│       ├── network.bicep             # VNet + Private Endpoint + Private DNS Zone
 │       └── keyVault.bicep            # Key Vault
 │
 ├── workflow/                   # データ管理ユーティリティ
@@ -142,17 +158,26 @@ npm でインストールしているライブラリ:
 
 ### アプリケーションセキュリティ
 
-- **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ、デバッグ時は `localhost:5173` のみ、それ以外は許可なし）
+- **レート制限**: `/api/login` エンドポイントに `flask-limiter` で **5 リクエスト/分** の制限を適用（ブルートフォース攻撃対策）
+- **オープンリダイレクト対策**: ログイン後のリダイレクト先は `redirect.startsWith('/') && !redirect.startsWith('//')` で検証し、外部サイトへのリダイレクトを防止
+- **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ、デバッグ時は `localhost:5173` のみ、それ以外は許可なし）。`allowedHeaders` は `Authorization` と `Content-Type` のみに制限
 - **入力バリデーション**: `dive_id` パスパラメータは正規表現 `[A-Za-z0-9_\-]+` で検証（パストラバーサル対策）
 - **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。サーバー側で `MAX_CONTENT_LENGTH = 5 MB` 、フロントエンドでもファイルサイズ検証（0バイト・5 MB 超過を拒否）。一時ファイルは処理完了後に削除。エラー時のレスポンスにスタックトレースを含めない
 - **上書き検知**: アップロード時に `dive_exists()` で同一 ID の既存データを確認。上書き時はレスポンスに `overwritten: true` を返し、フロントエンドで警告表示
 - **XXE 対策**: ZXU ファイル内の XML パースに `defusedxml` を使用（外部エンティティ展開攻撃の防止）
 - **XSS 対策**: DetailView のメモ表示は HTML エスケープ後に `#tag` 変換を実行
 
+### ネットワークセキュリティ
+
+- **VNet 統合**: Container Apps 環境は VNet の `container-apps-subnet` (10.0.0.0/23) に統合。Microsoft.App/environments への委任が必要
+- **Private Endpoint**: Cosmos DB は `private-endpoints-subnet` (10.0.2.0/24) 経由でのみアクセス可能。`publicNetworkAccess: Disabled` により公共インターネットからのアクセスを遮断
+- **Private DNS Zone**: `privatelink.documents.azure.com` を VNet にリンクし、Container Apps から Cosmos DB への名前解決をプライベートに実行
+
 ### シークレット管理
 
 - Cosmos DB へのアクセスはマネージド ID による Entra ID 認証を使用し、キーやシークレットは不要
 - `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID のクライアント ID を指定し、`DefaultAzureCredential` が適切な ID を選択
+- `AUTH_EMAIL` / `AUTH_PASSWORD` / `SECRET_KEY` は Container App の secrets に保存し、環境変数で `secretRef` として参照（平文で環境変数に置かない）
 - Key Vault は将来的なシークレット管理用に存在するが、現在 Cosmos DB 接続にはキーを使用しない
 
 ---

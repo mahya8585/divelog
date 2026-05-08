@@ -94,9 +94,13 @@ azd deploy backend
 cd frontend
 
 # VITE_API_BASE_URL を設定（バックエンドの URL）
-echo "VITE_API_BASE_URL=https://ca-divelog.japaneast.azurecontainerapps.io" > .env.production
+# ⮳ Vite のビルド時に静的に埋め込まれるため、SWA の appsettings ではなく
+#   ビルド時に環境変数として設定する必要がある
+export VITE_API_BASE_URL=https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io
 npm run build
 ```
+
+> **Important**: `VITE_API_BASE_URL` は Vite のビルド時に JS ファイルにハードコードされます。SWA のアプリ設定で設定しても実行時には反映されません。バックエンド URL が変更された場合は再ビルド・再デプロイが必要です。
 
 ### Static Web Apps CLI でデプロイ
 
@@ -159,7 +163,32 @@ az ad app federated-credential create --id <appId> --parameters '{
 
 ---
 
-## Bicep パラメータ一覧
+## 5.5. 認証シークレットの設定
+
+初回デプロイ時に Container App へ認証用シークレットを設定します。これにより起動時に Cosmos DB にユーザーがシードされます。
+
+```bash
+# シークレットを設定
+az containerapp secret set \
+  -g rg-divelogsite -n ca-divelog \
+  --secrets "auth-email=<your-email>" \
+            "auth-password=<your-password>" \
+            "secret-key=$(openssl rand -base64 36)"
+
+# 環境変数をシークレット参照として追加
+az containerapp update \
+  -g rg-divelogsite -n ca-divelog \
+  --set-env-vars "AUTH_EMAIL=secretref:auth-email" \
+                 "AUTH_PASSWORD=secretref:auth-password" \
+                 "SECRET_KEY=secretref:secret-key"
+```
+
+> **Note**: Bicep デプロイ時に `secretKey` / `authEmail` / `authPassword` パラメータを指定すれば自動で設定されます。
+> 上記 CLI 手順はパラメータを省略してデプロイした場合の後付け設定用です。
+
+シークレットが設定されると新リビジョンが作成され、起動時に `seed_user_if_needed()` が実行されて Cosmos DB の `users` コンテナにユーザーが作成されます。
+
+---
 
 `infra/main.bicepparam` で変更可能なパラメータ:
 
@@ -201,13 +230,17 @@ az containerapp update \
 
 ### Cosmos DB に接続できない
 
-Key Vault のシークレット参照が正しいか確認:
+本番環境では Cosmos DB の `publicNetworkAccess: Disabled` + Private Endpoint 経由で接続します。
 
 ```bash
-# シークレットが存在するか確認
-az keyvault secret show \
-  --vault-name <kv-name> \
-  --name cosmos-key
+# Container App から Cosmos DB への接続を確認
+# → Cosmos DB RBAC ロール割り当てが正しいか確認
+az cosmosdb sql role assignment list \
+  --account-name cosmos-divelog \
+  --resource-group rg-divelogsite -o table
+
+# マネージド ID のプリンシパル ID を確認
+az identity show -n ca-divelog-id -g rg-divelogsite --query principalId -o tsv
 
 # Container App の環境変数を確認
 az containerapp show \
@@ -215,3 +248,21 @@ az containerapp show \
   -g rg-divelogsite \
   --query properties.template.containers[0].env
 ```
+
+> **Note**: `disableLocalAuth: true` が設定されているため、キーベース認証は使用できません。
+> Entra ID RBAC 認証（`Cosmos DB Built-in Data Contributor` ロール）のみが有効です。
+
+### ログインできない
+
+以下を確認してください:
+
+1. Container App に `AUTH_EMAIL` / `AUTH_PASSWORD` / `SECRET_KEY` が設定されているか:
+   ```bash
+   az containerapp show -n ca-divelog -g rg-divelogsite \
+     --query "properties.template.containers[0].env[].name" -o json
+   ```
+2. Cosmos DB `users` コンテナにユーザーが存在するか（シードが実行されたか）
+3. Container App のログを確認:
+   ```bash
+   az containerapp logs show -g rg-divelogsite -n ca-divelog --type console --tail 30
+   ```

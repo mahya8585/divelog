@@ -5,6 +5,7 @@
  */
 import { ref, computed } from 'vue'
 
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const STORAGE_KEY = 'divelog_token'
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000 // 10 分
 
@@ -33,7 +34,7 @@ async function _doLogout() {
   clearTimeout(_inactivityTimer)
   // サーバー側のトークンを削除（失敗しても続行）
   if (token) {
-    fetch('/api/logout', {
+    fetch(`${BASE_URL}/api/logout`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }).catch((err) => {
@@ -60,7 +61,7 @@ function _startTracking() {
  * @param {string} password
  */
 async function login(email, password) {
-  const res = await fetch('/api/login', {
+  const res = await fetch(`${BASE_URL}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
