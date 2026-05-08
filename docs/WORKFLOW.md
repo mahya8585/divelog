@@ -109,7 +109,8 @@ python workflow/convert_zxu_to_json.py
 
 ### 依存ライブラリ
 
-標準ライブラリのみ使用（`re`, `json`, `xml.etree.ElementTree`, `pathlib`, `datetime`）。
+- 標準ライブラリ: `re`, `json`, `pathlib`, `datetime`
+- `defusedxml`（XXE 対策。未インストール時は `xml.etree.ElementTree` にフォールバック）
 
 ### クレンジング処理一覧
 

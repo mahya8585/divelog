@@ -60,7 +60,7 @@ divelog/
 ├── frontend/                   # Vue 3 SPA
 │   ├── src/
 │   │   ├── main.js             # Vue Router 設定
-│   │   ├── App.vue             # レイアウト・グローバル CSS
+│   │   ├── App.vue             # レイアウト・ハンバーガーメニュー・グローバル CSS
 │   │   ├── api/dives.js        # API クライアント
 │   │   └── views/
 │   │       ├── HomeView.vue    # ダイブ一覧・ヒートマップ・検索
@@ -127,9 +127,11 @@ npm でインストールしているライブラリ:
 
 ### アプリケーションセキュリティ
 
-- **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ）
-- **入力バリデーション**: `dive_id` パスパラメータは `replace("_","").isalnum()` でアルファベット・数字・アンダースコアのみ許可（パストラバーサル対策）
-- **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。一時ファイルは処理完了後に削除。エラー時のレスポンスにスタックトレースを含めない
+- **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ、デバッグ時は `localhost:5173` のみ、それ以外は許可なし）
+- **入力バリデーション**: `dive_id` パスパラメータは正規表現 `[A-Za-z0-9_\-]+` で検証（パストラバーサル対策）
+- **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。サーバー側で `MAX_CONTENT_LENGTH = 5 MB` 、フロントエンドでもファイルサイズ検証（0バイト・5 MB 超過を拒否）。一時ファイルは処理完了後に削除。エラー時のレスポンスにスタックトレースを含めない
+- **上書き検知**: アップロード時に `dive_exists()` で同一 ID の既存データを確認。上書き時はレスポンスに `overwritten: true` を返し、フロントエンドで警告表示
+- **XXE 対策**: ZXU ファイル内の XML パースに `defusedxml` を使用（外部エンティティ展開攻撃の防止）
 - **XSS 対策**: DetailView のメモ表示は HTML エスケープ後に `#tag` 変換を実行
 
 ### シークレット管理

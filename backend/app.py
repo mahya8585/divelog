@@ -37,7 +37,7 @@ try:
 except ImportError:
     pass
 
-from data import extract_tags, load_all_dives, load_dive, save_dive, search_dives
+from data import dive_exists, extract_tags, load_all_dives, load_dive, save_dive, search_dives
 
 try:
     from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu
@@ -120,23 +120,6 @@ def get_dives():
     })
 
 
-@app.route("/api/dives/<dive_id>", methods=["GET"])
-def get_dive(dive_id: str):
-    """指定 ID のダイブ詳細を返す。"""
-    # dive_id の簡易バリデーション（パストラバーサル対策）
-    if not dive_id.replace("_", "").isalnum():
-        return jsonify({"error": "Invalid dive_id"}), 400
-    try:
-        dive = load_dive(dive_id)
-    except FileNotFoundError:
-        return jsonify({"error": "Dive not found"}), 404
-    except Exception:
-        return jsonify({"error": "Internal server error"}), 500
-
-    tags = extract_tags(dive.get("memo") or "")
-    return jsonify({"dive": dive, "tags": tags})
-
-
 @app.route("/api/dives/upload", methods=["POST"])
 def upload_dive():
     """ZXU ファイルをアップロードしてダイブデータを登録する。"""
@@ -162,8 +145,10 @@ def upload_dive():
             return jsonify({"error": "サーバー設定エラーが発生しました"}), 500
 
         dive_data = _convert_zxu(Path(tmp_path))
+        overwritten = dive_exists(dive_data.get("dive_id", ""))
         dive_id = save_dive(dive_data)
-        return jsonify({"dive_id": dive_id, "message": "登録が完了しました"}), 201
+        msg = "既存のデータを上書きしました" if overwritten else "登録が完了しました"
+        return jsonify({"dive_id": dive_id, "message": msg, "overwritten": overwritten}), 201
 
     except Exception:
         app.logger.exception("ZXU アップロード処理でエラーが発生しました")
@@ -171,6 +156,23 @@ def upload_dive():
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+@app.route("/api/dives/<dive_id>", methods=["GET"])
+def get_dive(dive_id: str):
+    """指定 ID のダイブ詳細を返す。"""
+    # dive_id の簡易バリデーション（パストラバーサル対策）
+    if not dive_id.replace("_", "").isalnum():
+        return jsonify({"error": "Invalid dive_id"}), 400
+    try:
+        dive = load_dive(dive_id)
+    except FileNotFoundError:
+        return jsonify({"error": "Dive not found"}), 404
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
+
+    tags = extract_tags(dive.get("memo") or "")
+    return jsonify({"dive": dive, "tags": tags})
 
 
 if __name__ == "__main__":

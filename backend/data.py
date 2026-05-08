@@ -122,6 +122,15 @@ def extract_tags(memo: str) -> list[str]:
     return re.findall(r"#(\S+)", memo)
 
 
+def dive_exists(dive_id: str) -> bool:
+    """指定 ID のダイブデータが存在するかを返す。"""
+    try:
+        load_dive(dive_id)
+        return True
+    except (FileNotFoundError, Exception):
+        return False
+
+
 def save_dive(dive_data: dict) -> str:
     """ダイブデータを保存し、dive_id を返す。"""
     dive_id = dive_data.get("dive_id")

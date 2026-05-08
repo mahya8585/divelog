@@ -180,14 +180,16 @@ file=<dive.zxu>
 ```json
 {
   "dive_id": "7072_49450_20251220100700_1",
-  "message": "登録が完了しました"
+  "message": "登録が完了しました",
+  "overwritten": false
 }
 ```
 
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `dive_id` | string | 登録されたダイブの固有 ID |
-| `message` | string | 完了メッセージ |
+| `message` | string | 完了メッセージ（上書き時は「既存のデータを上書きしました」） |
+| `overwritten` | boolean | 同一 `dive_id` のデータが既に存在し上書きした場合 `true` |
 
 ### エラーレスポンス
 
@@ -205,7 +207,8 @@ file=<dive.zxu>
 1. アップロードされたファイルの拡張子を検証（`.zxu` のみ許可）
 2. 一時ファイルに保存
 3. `workflow/convert_zxu_to_json.py` で JSON に変換
-4. `data.save_dive()` で Cosmos DB（または JSON ファイル）に保存
-5. 一時ファイルを削除
+4. `data.dive_exists()` で同一 `dive_id` の既存データを確認
+5. `data.save_dive()` で Cosmos DB（または JSON ファイル）に保存（既存データがあれば上書き）
+6. 一時ファイルを削除
 
 > **セキュリティ**: エラー発生時のレスポンスにはスタックトレースを含めず、サニタイズされたメッセージのみ返します。詳細はサーバーログに記録されます。

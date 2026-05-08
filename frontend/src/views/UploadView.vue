@@ -43,8 +43,8 @@
       </div>
 
       <!-- 成功 -->
-      <div v-if="successMsg" class="alert alert-success py-2 small">
-        <i class="bi bi-check-circle me-1"></i>{{ successMsg }}
+      <div v-if="successMsg" :class="['alert', 'py-2', 'small', wasOverwritten ? 'alert-warning' : 'alert-success']">
+        <i :class="['bi', 'me-1', wasOverwritten ? 'bi-exclamation-triangle' : 'bi-check-circle']"></i>{{ successMsg }}
         <router-link v-if="registeredId" :to="`/dive/${registeredId}`" class="ms-2 fw-semibold">
           詳細を見る
         </router-link>
@@ -74,6 +74,7 @@ const uploading    = ref(false)
 const errorMsg     = ref('')
 const successMsg   = ref('')
 const registeredId = ref('')
+const wasOverwritten = ref(false)
 const isDragOver   = ref(false)
 
 function triggerFileInput() {
@@ -115,10 +116,14 @@ async function doUpload() {
   errorMsg.value   = ''
   successMsg.value = ''
   registeredId.value = ''
+  wasOverwritten.value = false
   try {
     const result = await uploadDive(selectedFile.value)
     registeredId.value = result.dive_id
-    successMsg.value = `登録が完了しました（ID: ${result.dive_id}）`
+    wasOverwritten.value = !!result.overwritten
+    successMsg.value = result.overwritten
+      ? `既存のダイブログを上書きしました（ID: ${result.dive_id}）`
+      : `登録が完了しました（ID: ${result.dive_id}）`
     selectedFile.value = null
     if (fileInputRef.value) fileInputRef.value.value = ''
   } catch (e) {
