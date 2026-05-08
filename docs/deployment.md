@@ -114,16 +114,47 @@ npx @azure/static-web-apps-cli deploy ./dist \
 
 ### GitHub Actions で自動デプロイ（推奨）
 
-Static Web Apps を GitHub リポジトリと連携すると、`main` ブランチへの push で自動デプロイされます。
+`main` ブランチへの push で自動デプロイが実行されます。
+
+| ワークフロー | トリガーパス | 処理 |
+|---|---|---|
+| `.github/workflows/deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
+| `.github/workflows/deploy-frontend.yml` | `frontend/**` | Static Web Apps デプロイ |
+
+#### 必要な GitHub Secrets
+
+| Secret 名 | 説明 | 取得方法 |
+|---|---|---|
+| `AZURE_CLIENT_ID` | OIDC 用 Entra ID アプリのクライアント ID | `az ad app list --display-name gh-divelog --query "[0].appId"` |
+| `AZURE_TENANT_ID` | Azure テナント ID | `az account show --query tenantId` |
+| `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID | `az account show --query id` |
+| `SWA_DEPLOYMENT_TOKEN` | SWA デプロイトークン | `az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query "properties.apiKey" -o tsv` |
+
+#### OIDC 認証のセットアップ
+
+バックエンドのデプロイでは Entra ID アプリ登録 + Federated Credential による OIDC 認証を使用します。
 
 ```bash
-az staticwebapp update \
-  -n swa-divelog \
-  -g rg-divelogsite \
-  --source https://github.com/mahya8585/divelog \
-  --branch main \
-  --app-location frontend \
-  --output-location dist
+# 1. アプリ登録
+az ad app create --display-name "gh-divelog"
+
+# 2. サービスプリンシパル作成
+az ad sp create --id <appId>
+
+# 3. Contributor ロール付与
+az role assignment create \
+  --assignee-object-id <spObjectId> \
+  --assignee-principal-type ServicePrincipal \
+  --role Contributor \
+  --scope /subscriptions/<subscriptionId>/resourceGroups/rg-divelogsite
+
+# 4. Federated Credential 作成（GitHub Actions OIDC 用）
+az ad app federated-credential create --id <appId> --parameters '{
+  "name": "github-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:<owner>/<repo>:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
 ```
 
 ---

@@ -41,13 +41,20 @@
       "dive_id": "7072_49450_20251220100700_1",
       "dive_info": {
         "datetime": "2025-12-20T10:07:00",
-        "location": "青の洞窟",
-        "lat": 26.3944,
-        "lon": 127.8567,
-        "max_depth": 18.5,
-        "avg_depth": 9.2,
-        "dive_time": 47,
-        "water_temp": 24.0
+        "dive_number": 1,
+        "max_depth_m": 18.5,
+        "avg_depth_m": 9.2,
+        "dive_time_min": 47,
+        "min_temp_c": 24.0,
+        "surface_interval_min": 0,
+        "rating": 0
+      },
+      "location": {
+        "name": "青の洞窟",
+        "gps_lat": 26.3944,
+        "gps_lon": 127.8567,
+        "surface_temp_c": 26.0,
+        "water_min_temp_c": 24.0
       },
       "memo": "#青の洞窟 #ウミガメ 透明度抜群"
     }
@@ -60,10 +67,10 @@
       "lat": 26.3944,
       "lon": 127.8567,
       "name": "青の洞窟",
-      "id": "7072_49450_20251220100700_1"
+      "count": 3
     }
   ],
-  "tags": ["青の洞窟", "ウミガメ"],
+  "has_search": false,
   "total": 1
 }
 ```
@@ -72,8 +79,8 @@
 |---|---|
 | `dives` | ダイブ一覧（日時降順） |
 | `heatmap_data` | `[lat, lon, 本数]` の配列（ヒートマップ用） |
-| `markers_data` | 地図マーカー用データ |
-| `tags` | フィルタ後データに含まれるタグ一覧 |
+| `markers_data` | 地図マーカー用データ（`lat`, `lon`, `name`, `count`） |
+| `has_search` | 検索フィルタが適用されているかどうか |
 | `total` | フィルタ後の件数 |
 
 ---
@@ -92,29 +99,48 @@
 
 ```json
 {
-  "dive_id": "7072_49450_20251220100700_1",
-  "dive_info": {
-    "datetime": "2025-12-20T10:07:00",
-    "location": "青の洞窟",
-    "lat": 26.3944,
-    "lon": 127.8567,
-    "max_depth": 18.5,
-    "avg_depth": 9.2,
-    "dive_time": 47,
-    "entry_time": "10:07",
-    "exit_time":  "10:54",
-    "surface_interval": 120,
-    "water_temp": 24.0,
-    "buddy": "田中",
-    "tank": "12L AL80"
+  "dive": {
+    "dive_id": "7072_49450_20251220100700_1",
+    "dive_info": {
+      "datetime": "2025-12-20T10:07:00",
+      "dive_number": 1,
+      "max_depth_m": 18.5,
+      "avg_depth_m": 9.2,
+      "dive_time_min": 47,
+      "elapsed_dive_time_min": 47,
+      "min_temp_c": 24.0,
+      "surface_interval_min": 0,
+      "rating": 0,
+      "deco_required": false,
+      "violation": false,
+      "dive_mode": "OC"
+    },
+    "location": {
+      "name": "青の洞窟",
+      "gps_lat": 26.3944,
+      "gps_lon": 127.8567,
+      "air_temp_c": 28.0,
+      "surface_temp_c": 26.0,
+      "water_min_temp_c": 24.0
+    },
+    "diver": { "name": "Diver" },
+    "equipment": {
+      "computer": "...",
+      "gear": "...",
+      "tank": "12L AL80"
+    },
+    "profile": [
+      { "time_sec": 0, "depth_m": 0.0, "temp_c": 24.0 },
+      { "time_sec": 30, "depth_m": 18.5, "temp_c": 23.5 }
+    ],
+    "sample_interval_sec": 10,
+    "memo": "#青の洞窟 #ウミガメ 透明度抜群"
   },
-  "profile": [
-    { "time": 0,  "depth": 0.0,  "temp": 24.0 },
-    { "time": 30, "depth": 18.5, "temp": 23.5 }
-  ],
-  "gear": { ... },
-  "memo": "#青の洞窟 #ウミガメ 透明度抜群"
+  "tags": ["青の洞窟", "ウミガメ"]
 }
+```
+
+> レスポンスは `dive` オブジェクトと、メモから抽出された `tags` 配列の2つのフィールドで構成されます。
 ```
 
 ### エラーレスポンス

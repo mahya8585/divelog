@@ -134,3 +134,30 @@ npm でインストールしているライブラリ:
 - Cosmos DB へのアクセスはマネージド ID による Entra ID 認証を使用し、キーやシークレットは不要
 - `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID のクライアント ID を指定し、`DefaultAzureCredential` が適切な ID を選択
 - Key Vault は将来的なシークレット管理用に存在するが、現在 Cosmos DB 接続にはキーを使用しない
+
+---
+
+## CI/CD
+
+### GitHub Actions ワークフロー
+
+main ブランチへの push で自動デプロイが実行されます。Azure への認証は OIDC (Federated Credentials) を使用します。
+
+| ワークフロー | トリガーパス | 処理内容 |
+|---|---|---|
+| `deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
+| `deploy-frontend.yml` | `frontend/**` | Static Web Apps デプロイ |
+
+### 認証方式
+
+- **バックエンド**: Entra ID アプリ登録 (`gh-divelog`) + Federated Credential で OIDC 認証
+- **フロントエンド**: SWA デプロイトークン (`SWA_DEPLOYMENT_TOKEN`)
+
+### 必要な GitHub Secrets
+
+| Secret 名 | 説明 |
+|---|---|
+| `AZURE_CLIENT_ID` | GitHub Actions 用 Entra ID アプリのクライアント ID |
+| `AZURE_TENANT_ID` | Azure テナント ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID |
+| `SWA_DEPLOYMENT_TOKEN` | Static Web Apps のデプロイトークン |
