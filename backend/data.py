@@ -178,7 +178,6 @@ def save_zxu_upload(zxu_text: str, filename: str) -> str:
     container = _get_zxu_container()
     container.create_item({
         "id": upload_id,
-        "upload_id": upload_id,
         "filename": filename,
         "zxu_text": zxu_text,
         "status": "uploaded",

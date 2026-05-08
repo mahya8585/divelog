@@ -38,19 +38,20 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) ->
         uploads_container.upsert_item(upload_doc)
         return
 
-    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
-            tmp_path = tmp.name
-            tmp.write(zxu_text.encode("utf-8"))
-
-        dive_data = convert_zxu_to_json(Path(tmp_path))
+        with tempfile.NamedTemporaryFile(suffix=".zxu", mode="w+", encoding="utf-8") as tmp:
+            tmp.write(zxu_text)
+            tmp.flush()
+            dive_data = convert_zxu_to_json(Path(tmp.name))
         dive_doc = dict(dive_data)
-        dive_doc["id"] = dive_doc["dive_id"]
+        dive_id = dive_doc.get("dive_id")
+        if not dive_id:
+            raise ValueError("変換結果に dive_id がありません")
+        dive_doc["id"] = dive_id
         dives_container.upsert_item(dive_doc)
 
         upload_doc["status"] = "processed"
-        upload_doc["processed_dive_id"] = dive_doc["dive_id"]
+        upload_doc["processed_dive_id"] = dive_id
         upload_doc["processed_at"] = datetime.now(timezone.utc).isoformat()
         uploads_container.upsert_item(upload_doc)
     except Exception as e:
@@ -59,9 +60,6 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) ->
         upload_doc["error"] = str(e)
         upload_doc["failed_at"] = datetime.now(timezone.utc).isoformat()
         uploads_container.upsert_item(upload_doc)
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
 
 
 @app.function_name(name="zxu_change_feed_processor")
