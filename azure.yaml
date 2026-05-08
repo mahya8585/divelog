@@ -26,3 +26,9 @@ services:
     project: ./frontend
     host: staticwebapp
     language: js
+
+  # ── Functions: ZXU Change Feed Processor ──────────────────────────
+  functions:
+    project: ./functions
+    host: function
+    language: python

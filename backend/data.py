@@ -150,11 +150,21 @@ def extract_tags(memo: str) -> list[str]:
 
 
 def dive_exists(dive_id: str) -> bool:
-    """指定 ID のダイブデータが存在するかを返す。"""
+    """指定 ID のダイブデータが存在するかを返す。
+    存在しない場合のみ False。その他の例外はそのまま伝搬し、
+    「ネットワークエラーだが上書きされる」という誤動作を防ぐ。
+    """
+    if _use_cosmos():
+        from azure.cosmos.exceptions import CosmosResourceNotFoundError
+        try:
+            _load_one_from_cosmos(dive_id)
+            return True
+        except CosmosResourceNotFoundError:
+            return False
     try:
-        load_dive(dive_id)
+        _load_one_from_json(dive_id)
         return True
-    except (FileNotFoundError, Exception):
+    except FileNotFoundError:
         return False
 
 
@@ -294,17 +304,26 @@ def save_token(token: str, email: str) -> None:
 
 def get_token_email(token: str) -> str | None:
     """トークンに対応するメールアドレスを返す。存在しない / 期限切れの場合は None。
-    Cosmos DB の TTL で自動削除されるが、削除タイミングの遅延に備えて expires_at も確認する。
+    Cosmos DB の TTL で自動削除されるが、削除タイミングの遅延に備えて expires_at も確認し、
+    期限切れを検知したトークンは明示的に削除して再利用を妨げる。
     """
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
         container = _get_tokens_container()
         tid = _token_id(token)
         item = container.read_item(item=tid, partition_key=tid)
-        if item.get("expires_at", 0) < time.time():
-            return None
-        return item.get("email")
+    except CosmosResourceNotFoundError:
+        return None
     except Exception:
         return None
+    if item.get("expires_at", 0) < time.time():
+        # 期限切れトークンは明示的に削除
+        try:
+            container.delete_item(item=tid, partition_key=tid)
+        except Exception:
+            pass
+        return None
+    return item.get("email")
 
 
 def delete_token(token: str) -> None:

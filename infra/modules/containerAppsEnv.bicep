@@ -49,3 +49,4 @@ resource caEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 
 output envId  string = caEnv.id
 output envName string = caEnv.name
+output logAnalyticsWorkspaceId string = logAnalytics.id

@@ -1,17 +1,14 @@
 /*
   divelog — メインテンプレート (本番専用)
   ┌─────────────────────────────────────────────────┐
-  │  Azure VNet + プライベートエンドポイント         │
-  │  Azure Container Registry (ACR) Basic           │
-  │  Azure Container Apps (バックエンド Flask API)   │
-  │  Azure Static Web Apps Free (フロントエンド)    │
-  │  Azure Cosmos DB Serverless                     │
-  │  Azure Key Vault (シークレット管理)              │
+  │  VNet + プライベートエンドポイント               │
+  │  Container Registry (ACR) Basic                 │
+  │  Container Apps (バックエンド Flask API)         │
+  │  Static Web Apps Free (フロントエンド)           │
+  │  Cosmos DB Serverless (LocalAuth 無効)          │
+  │  Function App Flex Consumption (Change Feed)    │
+  │  Application Insights / Log Analytics           │
   └─────────────────────────────────────────────────┘
-  デプロイ:
-    az group create -n rg-divelogsite -l japaneast
-    az deployment group create -g rg-divelogsite -f infra/main.bicep -p infra/main.bicepparam
-  または azd up
 */
 
 targetScope = 'resourceGroup'
@@ -23,35 +20,36 @@ param appName string = 'divelog'
 @description('デプロイリージョン')
 param location string = resourceGroup().location
 
-@description('バックエンドコンテナイメージ (例: myregistry.azurecr.io/divelog-backend:latest)')
+@description('バックエンドコンテナイメージ')
 param backendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
 @description('バックエンドのスケールアップ最大レプリカ数')
 param backendMaxReplicas int = 3
 
-@description('Static Web Apps のリージョン（限られたリージョンのみ対応）')
+@description('バックエンドの最小レプリカ数（メモリ内 Limiter 状態維持のため 1 以上）')
+@minValue(1)
+param backendMinReplicas int = 1
+
+@description('Static Web Apps のリージョン')
 param staticWebAppLocation string = 'eastasia'
 
-@description('認証トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用）')
+@description('認証トークン署名用シークレットキー（Cosmos 未使用フォールバック用、通常は空）')
 @secure()
 param secretKey string = ''
 
-@description('初回セットアップ用の管理者メールアドレス（users コンテナへのシード用）')
-@secure()
-param authEmail string = ''
-
-@description('初回セットアップ用の管理者パスワード（users コンテナへのシード用）')
-@secure()
-param authPassword string = ''
-
 // ── 変数 ───────────────────────────────────────────────────
-var acrName  = replace('acr${appName}', '-', '')                        // ACR 名は英数小文字のみ
-var kvName   = 'kv-${appName}-${take(uniqueString(resourceGroup().id), 6)}'  // グローバル一意
-var vnetName = 'vnet-${appName}'
+var acrName     = replace('acr${appName}', '-', '')
+var vnetName    = 'vnet-${appName}'
+var swaName     = 'swa-${appName}'
+var backendName = 'ca-${appName}'
+var funcName    = 'func-${appName}'
+// Storage アカウント名は英数小文字 3-24
+var storageName = take(toLower(replace('st${appName}${uniqueString(resourceGroup().id)}', '-', '')), 24)
+var aiName      = 'appi-${appName}'
 
 // ── モジュール ─────────────────────────────────────────────
 
-// 1. Azure Container Registry (Basic)
+// 1. ACR
 module acr 'modules/containerRegistry.bicep' = {
   name: 'acr'
   params: {
@@ -60,91 +58,118 @@ module acr 'modules/containerRegistry.bicep' = {
   }
 }
 
-// 2. Cosmos DB Serverless（VNet/PE より先に作成）
+// 2. Cosmos DB
 module cosmos 'modules/cosmosDb.bicep' = {
   name: 'cosmos'
   params: {
-    accountName  : 'cosmos-${appName}'
-    location     : location
-    databaseName : 'divelog'
-    containerName: 'dives'
+    accountName     : 'cosmos-${appName}'
+    location        : location
+    databaseName    : 'divelog'
+    containerName   : 'dives'
     zxuContainerName: 'zxu_uploads'
   }
 }
 
-// 3. VNet + プライベートエンドポイント（Cosmos DB 用）
+// 3. VNet + PE
 module network 'modules/network.bicep' = {
   name: 'network'
   params: {
-    vnetName        : vnetName
-    location        : location
-    cosmosAccountId : cosmos.outputs.accountId
+    vnetName         : vnetName
+    location         : location
+    cosmosAccountId  : cosmos.outputs.accountId
     cosmosAccountName: 'cosmos-${appName}'
   }
 }
 
-// 4. Log Analytics + Container Apps 環境（VNet 統合）
+// 4. Container Apps Env + Log Analytics
 module caEnv 'modules/containerAppsEnv.bicep' = {
   name: 'ca-env'
   params: {
-    name                   : 'cae-${appName}'
-    location               : location
-    logName                : 'log-${appName}'
-    infrastructureSubnetId : network.outputs.caSubnetId
+    name                  : 'cae-${appName}'
+    location              : location
+    logName               : 'log-${appName}'
+    infrastructureSubnetId: network.outputs.caSubnetId
   }
 }
 
-// 5. Key Vault（シークレット格納用）
-module kv 'modules/keyVault.bicep' = {
-  name: 'keyvault'
-  params: {
-    vaultName   : kvName
-    location    : location
-  }
-}
-
-// 6. Azure Container Apps (バックエンド)
-//    Cosmos DB は Entra ID (RBAC) + プライベートエンドポイント経由で接続
-module backend 'modules/containerApp.bicep' = {
-  name: 'backend'
-  params: {
-    name              : 'ca-${appName}'
-    location          : location
-    containerAppsEnvId: caEnv.outputs.envId
-    image             : backendImage
-    acrLoginServer    : acr.outputs.loginServer
-    acrId             : acr.outputs.acrId
-    maxReplicas       : backendMaxReplicas
-    cosmosEndpoint    : cosmos.outputs.endpoint
-    cosmosZxuContainerName: 'zxu_uploads'
-    secretKey         : secretKey
-    authEmail         : authEmail
-    authPassword      : authPassword
-  }
-}
-
-// 7. Azure Static Web Apps (フロントエンド) Free
+// 5. SWA（先に作成して URL を確定させる）
 module frontend 'modules/staticWebApp.bicep' = {
   name: 'frontend'
   params: {
-    name      : 'swa-${appName}'
-    location  : staticWebAppLocation
-    backendUrl: backend.outputs.fqdn
+    name    : swaName
+    location: staticWebAppLocation
+  }
+}
+
+// 6. Container Apps（CORS に SWA URL を渡す）
+module backend 'modules/containerApp.bicep' = {
+  name: 'backend'
+  params: {
+    name                  : backendName
+    location              : location
+    containerAppsEnvId    : caEnv.outputs.envId
+    image                 : backendImage
+    acrLoginServer        : acr.outputs.loginServer
+    acrId                 : acr.outputs.acrId
+    maxReplicas           : backendMaxReplicas
+    minReplicas           : backendMinReplicas
+    allowedOrigins        : frontend.outputs.url
+    cosmosEndpoint        : cosmos.outputs.endpoint
+    cosmosDatabaseName    : cosmos.outputs.databaseName
+    cosmosZxuContainerName: cosmos.outputs.zxuContainerName
+    secretKey             : secretKey
+  }
+}
+
+// 7. Functions（ZXU Change Feed Processor）
+module functions 'modules/functionApp.bicep' = {
+  name: 'functions'
+  params: {
+    functionAppName             : funcName
+    location                    : location
+    storageAccountName          : storageName
+    appInsightsName             : aiName
+    cosmosEndpoint              : cosmos.outputs.endpoint
+    cosmosDatabaseName          : cosmos.outputs.databaseName
+    cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
+    cosmosZxuLeasesContainerName: cosmos.outputs.zxuLeasesContainerName
+    cosmosDivesContainerName    : cosmos.outputs.divesContainerName
+    logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
+  }
+}
+
+// 8. SWA に backend URL を appsetting として設定
+module frontendConfig 'modules/staticWebAppConfig.bicep' = {
+  name: 'frontend-config'
+  params: {
+    staticWebAppName: frontend.outputs.name
+    backendUrl      : backend.outputs.fqdn
+  }
+}
+
+// 9. Cosmos データプレーン RBAC: backend に Data Contributor 付与
+module cosmosBackendRole 'modules/cosmosRoleAssignment.bicep' = {
+  name: 'cosmos-role-backend'
+  params: {
+    cosmosAccountName     : cosmos.outputs.accountName
+    principalId           : backend.outputs.principalId
+    roleAssignmentNameSeed: 'backend'
+  }
+}
+
+// 10. Cosmos データプレーン RBAC: functions に Data Contributor 付与
+module cosmosFunctionsRole 'modules/cosmosRoleAssignment.bicep' = {
+  name: 'cosmos-role-functions'
+  params: {
+    cosmosAccountName     : cosmos.outputs.accountName
+    principalId           : functions.outputs.principalId
+    roleAssignmentNameSeed: 'functions'
   }
 }
 
 // ── 出力 ───────────────────────────────────────────────────
-@description('Container Registry ログインサーバー')
-output acrLoginServer string = acr.outputs.loginServer
-
-@description('バックエンド Container Apps URL')
-output backendUrl string = backend.outputs.fqdn
-
-@description('フロントエンド Static Web Apps URL')
-output frontendUrl string = frontend.outputs.url
-
-@description('Cosmos DB エンドポイント')
-output cosmosEndpoint string = cosmos.outputs.endpoint
-
-@description('Key Vault URI')
-output keyVaultUri string = kv.outputs.vaultUri
+output acrLoginServer  string = acr.outputs.loginServer
+output backendUrl      string = backend.outputs.fqdn
+output frontendUrl     string = frontend.outputs.url
+output cosmosEndpoint  string = cosmos.outputs.endpoint
+output functionAppName string = functions.outputs.functionAppName

@@ -12,12 +12,8 @@ import re
 import json
 from pathlib import Path
 
-try:
-    from defusedxml.ElementTree import fromstring as _safe_fromstring
-except ImportError:
-    # フォールバック: defusedxml 未インストール時は標準ライブラリを使用
-    import xml.etree.ElementTree as ET
-    _safe_fromstring = ET.fromstring
+# defusedxml は必須（XXE / Billion Laughs 対策）。未インストール時は明示的にエラーとする。
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 
 # ---------------------------------------------------------------------------
