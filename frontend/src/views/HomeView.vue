@@ -54,7 +54,7 @@
 
     <!-- ローディング -->
     <div v-if="loading" class="text-center py-5">
-      <div class="spinner-border text-primary" role="status"></div>
+      <LoadingIndicator />
     </div>
 
     <!-- エラー -->
@@ -92,6 +92,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchDives } from '../api/dives.js'
+import LoadingIndicator from '../components/LoadingIndicator.vue'
 
 const route  = useRoute()
 const router = useRouter()
