@@ -6,6 +6,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 # ── パス ────────────────────────────────────────────────
@@ -14,14 +15,30 @@ _DEFAULT_JSON_DIR = Path(__file__).parent.parent / "workflow" / "json"
 JSON_DIR = Path(os.environ.get("JSON_DIR", str(_DEFAULT_JSON_DIR)))
 
 # ── Cosmos DB 設定（環境変数） ───────────────────────────
-COSMOS_ENDPOINT  = os.environ.get("COSMOS_ENDPOINT", "")
-COSMOS_KEY       = os.environ.get("COSMOS_KEY", "")
-COSMOS_DATABASE  = os.environ.get("COSMOS_DATABASE", "divelog")
-COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "dives")
+COSMOS_ENDPOINT         = os.environ.get("COSMOS_ENDPOINT", "")
+COSMOS_KEY              = os.environ.get("COSMOS_KEY", "")
+COSMOS_DATABASE         = os.environ.get("COSMOS_DATABASE", "divelog")
+COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
+COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
+COSMOS_TOKENS_CONTAINER = os.environ.get("COSMOS_TOKENS_CONTAINER", "tokens")
+
+# トークン有効期限（秒）: 10 分
+TOKEN_TTL_SECONDS = 10 * 60
 
 
 def _use_cosmos() -> bool:
     return bool(COSMOS_ENDPOINT)
+
+
+# ── Cosmos DB クライアント共通ヘルパー ─────────────────────
+
+def _get_cosmos_client():
+    """Cosmos DB クライアントを返す（接続キー or マネージド ID）。"""
+    from azure.cosmos import CosmosClient
+    if COSMOS_KEY:
+        return CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+    from azure.identity import DefaultAzureCredential
+    return CosmosClient(COSMOS_ENDPOINT, credential=DefaultAzureCredential())
 
 
 # ── JSON ファイルから読み込む ──────────────────────────────
@@ -46,19 +63,15 @@ def _load_one_from_json(dive_id: str) -> dict:
         return json.load(f)
 
 
-# ── Cosmos DB から読み込む ─────────────────────────────────
+# ── Cosmos DB から読み込む（ダイブデータ） ────────────────
 
 def _get_container():
-    from azure.cosmos import CosmosClient
-    if COSMOS_KEY:
-        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
-    else:
-        from azure.identity import DefaultAzureCredential
-        client = CosmosClient(COSMOS_ENDPOINT, credential=DefaultAzureCredential())
-    return (
-        client
-        .get_database_client(COSMOS_DATABASE)
-        .get_container_client(COSMOS_CONTAINER)
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
     )
 
 
@@ -90,7 +103,7 @@ def _save_to_json(dive_data: dict) -> None:
         json.dump(dive_data, f, ensure_ascii=False, indent=2)
 
 
-# ── Cosmos DB へ書き込む ──────────────────────────────────
+# ── Cosmos DB へ書き込む（ダイブデータ） ──────────────────
 
 def _save_to_cosmos(dive_data: dict) -> None:
     container = _get_container()
@@ -99,7 +112,7 @@ def _save_to_cosmos(dive_data: dict) -> None:
     container.upsert_item(doc)
 
 
-# ── 公開 API ──────────────────────────────────────────────
+# ── 公開 API（ダイブデータ） ──────────────────────────────
 
 def load_all_dives() -> list[dict]:
     """全ダイブデータを日時降順で返す。"""
@@ -180,3 +193,96 @@ def search_dives(
         results.append(d)
 
     return results
+
+
+# ── ユーザー管理（Cosmos DB `users` コンテナ） ────────────
+
+def _get_users_container():
+    """users コンテナを返す。存在しない場合は作成する。"""
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_USERS_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+    )
+
+
+def get_user(email: str) -> dict | None:
+    """指定メールアドレスのユーザーを返す。存在しない場合は None。"""
+    try:
+        container = _get_users_container()
+        return container.read_item(item=email, partition_key=email)
+    except Exception:
+        return None
+
+
+def upsert_user(email: str, password_hash: str) -> None:
+    """ユーザーを作成または更新する。"""
+    container = _get_users_container()
+    container.upsert_item({
+        "id": email,
+        "email": email,
+        "password_hash": password_hash,
+    })
+
+
+# ── トークン管理（Cosmos DB `tokens` コンテナ） ────────────
+
+def _get_tokens_container():
+    """tokens コンテナを返す。存在しない場合は TTL 付きで作成する。"""
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_TOKENS_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+        default_ttl=TOKEN_TTL_SECONDS,
+    )
+
+
+def save_token(token: str, email: str) -> None:
+    """トークンを Cosmos DB に保存する。
+    コンテナの defaultTtl によってドキュメントは自動削除されるが、
+    expires_at フィールドは TTL による削除タイミングの遅延を補うための二重チェック用に保持する。
+    """
+    container = _get_tokens_container()
+    container.upsert_item({
+        "id": token,
+        "email": email,
+        "expires_at": time.time() + TOKEN_TTL_SECONDS,
+    })
+
+
+def get_token_email(token: str) -> str | None:
+    """トークンに対応するメールアドレスを返す。存在しない / 期限切れの場合は None。
+    Cosmos DB の TTL で自動削除されるが、削除タイミングの遅延に備えて expires_at も確認する。
+    """
+    try:
+        container = _get_tokens_container()
+        item = container.read_item(item=token, partition_key=token)
+        if item.get("expires_at", 0) < time.time():
+            return None
+        return item.get("email")
+    except Exception:
+        return None
+
+
+def delete_token(token: str) -> None:
+    """トークンを削除する（ログアウト時）。"""
+    try:
+        container = _get_tokens_container()
+        container.delete_item(item=token, partition_key=token)
+    except Exception:
+        pass
+
+
+def seed_user_if_needed(email: str, password: str) -> None:
+    """ユーザーが存在しない場合のみ作成する（初回セットアップ用）。"""
+    if not email or not password:
+        return
+    existing = get_user(email)
+    if existing:
+        return
+    from werkzeug.security import generate_password_hash
+    upsert_user(email, generate_password_hash(password))

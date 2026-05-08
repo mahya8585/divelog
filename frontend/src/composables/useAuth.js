@@ -25,11 +25,23 @@ function _resetTimer() {
   }
 }
 
-function _doLogout() {
+async function _doLogout() {
+  const token = _token.value
   _token.value = ''
   sessionStorage.removeItem(STORAGE_KEY)
   ACTIVITY_EVENTS.forEach(ev => window.removeEventListener(ev, _resetTimer))
   clearTimeout(_inactivityTimer)
+  // サーバー側のトークンを削除（失敗しても続行）
+  if (token) {
+    fetch('/api/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch((err) => {
+      if (import.meta.env.DEV) {
+        console.warn('[useAuth] logout request failed:', err)
+      }
+    })
+  }
   if (_router) {
     _router.push('/login')
   }
