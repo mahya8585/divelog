@@ -34,7 +34,7 @@ defineProps({
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: .55rem;
+  gap: 0.55rem;
 }
 
 .nudibranch-track {
@@ -69,7 +69,7 @@ defineProps({
   margin: 0;
   color: var(--ocean-mid);
   font-weight: 600;
-  letter-spacing: .03em;
+  letter-spacing: 0.03em;
 }
 
 @keyframes crawl-right {
