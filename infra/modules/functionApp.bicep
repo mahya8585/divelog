@@ -17,6 +17,7 @@ param cosmosZxuContainerName string
 param cosmosZxuLeasesContainerName string
 param cosmosDivesContainerName string
 param logAnalyticsWorkspaceId string
+param functionSubnetId string
 
 // ── Storage (AzureWebJobsStorage 用) ─────────────────────
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -132,6 +133,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     serverFarmId: hostingPlan.id
     httpsOnly: true
     keyVaultReferenceIdentity: uaMI.id
+    virtualNetworkSubnetId: functionSubnetId
+    vnetRouteAllEnabled: true
     functionAppConfig: {
       deployment: {
         storage: {

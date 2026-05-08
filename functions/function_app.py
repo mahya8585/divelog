@@ -9,16 +9,19 @@ import azure.functions as func
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
 
-# Azure (Functions ランタイム) では本ファイルと同階層に workflow/ を同梱する。
-# ローカル開発時は1つ上 (リポジトリルート) の workflow/ を参照する。
+# Functions パッケージ内に同梱された convert_zxu_to_json を優先。
+# ローカル開発時はリポジトリの workflow/ パッケージから解決。
 _here = Path(__file__).resolve().parent
-for _candidate in (_here, _here.parent):
-    if (_candidate / "workflow" / "convert_zxu_to_json.py").exists():
-        if str(_candidate) not in sys.path:
-            sys.path.insert(0, str(_candidate))
-        break
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+_repo_root = _here.parent
+if (_repo_root / "workflow" / "convert_zxu_to_json.py").exists() and str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 
-from workflow.convert_zxu_to_json import convert_zxu_to_json
+try:
+    from convert_zxu_to_json import convert_zxu_to_json  # デプロイ時 (function_app.py と同階層)
+except ImportError:  # pragma: no cover - ローカル開発フォールバック
+    from workflow.convert_zxu_to_json import convert_zxu_to_json
 
 app = func.FunctionApp()
 

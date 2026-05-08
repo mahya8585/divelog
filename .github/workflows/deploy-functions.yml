@@ -32,22 +32,11 @@ jobs:
       - name: Stage function package
         run: |
           mkdir -p ./.deploy/functions
-          # Functions コード本体
+          # Functions コード本体（function_app.py / host.json / requirements.txt 等）
           cp -r functions/. ./.deploy/functions/
-          # workflow/convert_zxu_to_json.py を Functions パッケージに同梱
-          # （Azure 上で workflow/ ディレクトリ全体を import 可能にする）
-          mkdir -p ./.deploy/functions/workflow
-          cp workflow/convert_zxu_to_json.py ./.deploy/functions/workflow/
-          touch ./.deploy/functions/workflow/__init__.py
-
-      - name: Install dependencies into package
-        run: |
-          if [ -f ./.deploy/functions/requirements.txt ]; then
-            python -m pip install --upgrade pip
-            pip install \
-              --target="./.deploy/functions/.python_packages/lib/site-packages" \
-              -r ./.deploy/functions/requirements.txt
-          fi
+          # convert_zxu_to_json.py をフラット配置で同梱
+          # （function_app.py から `import convert_zxu_to_json` で参照可能にする）
+          cp workflow/convert_zxu_to_json.py ./.deploy/functions/
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -61,5 +50,7 @@ jobs:
         with:
           app-name: ${{ env.FUNCTION_APP_NAME }}
           package: ./.deploy/functions
-          scm-do-build-during-deployment: false
-          enable-oryx-build: false
+          # Flex Consumption では Oryx によるリモートビルドで requirements.txt から依存解決する
+          scm-do-build-during-deployment: true
+          enable-oryx-build: true
+          remote-build: true

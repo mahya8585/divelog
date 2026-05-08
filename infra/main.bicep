@@ -135,6 +135,7 @@ module functions 'modules/functionApp.bicep' = {
     cosmosZxuLeasesContainerName: cosmos.outputs.zxuLeasesContainerName
     cosmosDivesContainerName    : cosmos.outputs.divesContainerName
     logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
+    functionSubnetId            : network.outputs.fnSubnetId
   }
 }
 

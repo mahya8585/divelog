@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "3758931513631071444"
+      "templateHash": "16951118744789246725"
     }
   },
   "parameters": {
@@ -437,7 +437,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "791060181403365238"
+              "templateHash": "1107734036163326407"
             }
           },
           "parameters": {
@@ -457,7 +457,8 @@
           "variables": {
             "vnetAddressPrefix": "10.0.0.0/16",
             "caSubnetPrefix": "10.0.0.0/23",
-            "peSubnetPrefix": "10.0.2.0/24"
+            "peSubnetPrefix": "10.0.2.0/24",
+            "fnSubnetPrefix": "10.0.3.0/24"
           },
           "resources": [
             {
@@ -490,6 +491,20 @@
                     "name": "private-endpoints-subnet",
                     "properties": {
                       "addressPrefix": "[variables('peSubnetPrefix')]"
+                    }
+                  },
+                  {
+                    "name": "function-app-subnet",
+                    "properties": {
+                      "addressPrefix": "[variables('fnSubnetPrefix')]",
+                      "delegations": [
+                        {
+                          "name": "Microsoft.App.environments",
+                          "properties": {
+                            "serviceName": "Microsoft.App/environments"
+                          }
+                        }
+                      ]
                     }
                   }
                 ]
@@ -574,6 +589,10 @@
             "peSubnetId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'private-endpoints-subnet')]"
+            },
+            "fnSubnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'function-app-subnet')]"
             }
           }
         }
@@ -1061,6 +1080,9 @@
           },
           "logAnalyticsWorkspaceId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'ca-env'), '2025-04-01').outputs.logAnalyticsWorkspaceId.value]"
+          },
+          "functionSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.fnSubnetId.value]"
           }
         },
         "template": {
@@ -1070,7 +1092,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "1538607521137554478"
+              "templateHash": "2872422881612070175"
             }
           },
           "parameters": {
@@ -1102,6 +1124,9 @@
               "type": "string"
             },
             "logAnalyticsWorkspaceId": {
+              "type": "string"
+            },
+            "functionSubnetId": {
               "type": "string"
             }
           },
@@ -1241,6 +1266,8 @@
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('functionAppName')))]",
                 "httpsOnly": true,
                 "keyVaultReferenceIdentity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('functionAppName')))]",
+                "virtualNetworkSubnetId": "[parameters('functionSubnetId')]",
+                "vnetRouteAllEnabled": true,
                 "functionAppConfig": {
                   "deployment": {
                     "storage": {
@@ -1353,7 +1380,8 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', 'ca-env')]",
-        "[resourceId('Microsoft.Resources/deployments', 'cosmos')]"
+        "[resourceId('Microsoft.Resources/deployments', 'cosmos')]",
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
       ]
     },
     {
