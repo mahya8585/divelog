@@ -19,6 +19,9 @@
 ┌──────────▼──────────┐
 │  Azure Cosmos DB    │
 │  (Serverless/NoSQL) │
+│  ├─ dives  コンテナ │
+│  ├─ users  コンテナ │
+│  └─ tokens コンテナ │
 │  disableLocalAuth   │
 └─────────────────────┘
            ▲
@@ -37,7 +40,7 @@
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
 | Azure Container Apps | Consumption (ゼロスケール) | Flask API ホスティング |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
-| Azure Cosmos DB | Serverless | ダイブログデータ永続化（Entra ID RBAC 認証） |
+| Azure Cosmos DB | Serverless | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理 |
 | Azure Key Vault | Standard (RBAC モード) | 将来のシークレット管理用（現在 Cosmos DB は RBAC 認証） |
 | Log Analytics Workspace | PerGB2018 (30 日保持) | Container Apps ログ収集 |
 
@@ -59,13 +62,16 @@ divelog/
 │
 ├── frontend/                   # Vue 3 SPA
 │   ├── src/
-│   │   ├── main.js             # Vue Router 設定
-│   │   ├── App.vue             # レイアウト・ハンバーガーメニュー・グローバル CSS
-│   │   ├── api/dives.js        # API クライアント
+│   │   ├── main.js             # Vue Router 設定・ナビゲーションガード
+│   │   ├── App.vue             # レイアウト・ハンバーガーメニュー・ログアウトボタン
+│   │   ├── api/dives.js        # API クライアント（認証ヘッダー付与）
+│   │   ├── composables/
+│   │   │   └── useAuth.js      # 認証状態管理・自動ログアウト
 │   │   └── views/
 │   │       ├── HomeView.vue    # ダイブ一覧・ヒートマップ・検索
 │   │       ├── DetailView.vue  # ダイブ詳細・水深グラフ・地図
-│   │       └── UploadView.vue  # ZXU ファイルアップロード・ダイブログ登録
+│   │       ├── UploadView.vue  # ZXU ファイルアップロード・ダイブログ登録
+│   │       └── LoginView.vue   # ログインフォーム
 │   ├── index.html              # CDN (Bootstrap, Leaflet, Chart.js)
 │   ├── vite.config.js          # Vite 設定・開発プロキシ
 │   ├── staticwebapp.config.json # SPA ルーティングフォールバック設定
@@ -124,6 +130,15 @@ npm でインストールしているライブラリ:
 - **Cosmos DB RBAC**: `Cosmos DB Built-in Data Contributor` ロール (`00000000-0000-0000-0000-000000000002`) をマネージド ID のプリンシパル ID に対して付与
 - **AcrPull**: `AcrPull` ロールを ACR スコープで付与し、イメージ Pull を許可
 - **disableLocalAuth**: サブスクリプションポリシーにより Cosmos DB のキーベース認証は無効化されており、Entra ID 認証のみ使用可能
+
+### ユーザーログイン認証
+
+- **認証方式**: メールアドレス + パスワードによるログイン認証。トークンベースの Bearer 認証
+- **ユーザー管理**: Cosmos DB `users` コンテナにメールアドレスと PBKDF2 ハッシュ化パスワードを保存
+- **トークン管理**: Cosmos DB `tokens` コンテナにランダムトークン（`secrets.token_urlsafe(32)`）を保存。コンテナの `defaultTtl = 600`（10分）により自動削除。TTL 削除タイミングの遅延に備え `expires_at` フィールドによる二重チェックも実装
+- **自動ログアウト**: フロントエンドで `mousedown` / `keydown` / `scroll` / `touchstart` イベントを監視し、10分間無操作で自動ログアウト。ログアウト時は `/api/logout` でサーバー側トークンも削除
+- **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
+- **フォールバック**: Cosmos DB 未設定時は `AUTH_EMAIL` / `AUTH_PASSWORD` 環境変数と `itsdangerous` 署名トークンで認証（ローカル開発向け）
 
 ### アプリケーションセキュリティ
 

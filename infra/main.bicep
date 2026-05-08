@@ -31,6 +31,18 @@ param backendMaxReplicas int = 3
 @description('Static Web Apps のリージョン（限られたリージョンのみ対応）')
 param staticWebAppLocation string = 'eastasia'
 
+@description('認証トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用）')
+@secure()
+param secretKey string = ''
+
+@description('初回セットアップ用の管理者メールアドレス（users コンテナへのシード用）')
+@secure()
+param authEmail string = ''
+
+@description('初回セットアップ用の管理者パスワード（users コンテナへのシード用）')
+@secure()
+param authPassword string = ''
+
 // ── 変数 ───────────────────────────────────────────────────
 var acrName = replace('acr${appName}', '-', '')                        // ACR 名は英数小文字のみ
 var kvName  = 'kv-${appName}-${take(uniqueString(resourceGroup().id), 6)}'  // グローバル一意
@@ -90,6 +102,9 @@ module backend 'modules/containerApp.bicep' = {
     acrId             : acr.outputs.acrId
     maxReplicas       : backendMaxReplicas
     cosmosEndpoint    : cosmos.outputs.endpoint
+    secretKey         : secretKey
+    authEmail         : authEmail
+    authPassword      : authPassword
   }
 }
 

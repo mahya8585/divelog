@@ -23,6 +23,18 @@ param allowedOrigins string = '*'
 @description('Cosmos DB エンドポイント')
 param cosmosEndpoint string
 
+@description('認証トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用）')
+@secure()
+param secretKey string = ''
+
+@description('初回セットアップ用の管理者メールアドレス（users コンテナへのシード用）')
+@secure()
+param authEmail string = ''
+
+@description('初回セットアップ用の管理者パスワード（users コンテナへのシード用）')
+@secure()
+param authPassword string = ''
+
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -44,6 +56,19 @@ resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+// 環境変数の構成（認証関連は設定されている場合のみ追加）
+var baseEnv = [
+  { name: 'PORT',            value: '8000' }
+  { name: 'FLASK_DEBUG',     value: 'false' }
+  { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
+  { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+  { name: 'AZURE_CLIENT_ID', value: uaMI.properties.clientId }
+]
+var secretKeyEnv   = !empty(secretKey)    ? [{ name: 'SECRET_KEY',    value: secretKey }]    : []
+var authEmailEnv   = !empty(authEmail)    ? [{ name: 'AUTH_EMAIL',    value: authEmail }]    : []
+var authPasswordEnv = !empty(authPassword) ? [{ name: 'AUTH_PASSWORD', value: authPassword }] : []
+var containerEnv = concat(baseEnv, secretKeyEnv, authEmailEnv, authPasswordEnv)
+
 // ③ Container App 本体（ロール付与完了後に作成）
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name    : name
@@ -63,7 +88,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport  : 'auto'
         corsPolicy : {
           allowedOrigins     : split(allowedOrigins, ',')
-          allowedMethods     : ['GET', 'OPTIONS']
+          allowedMethods     : ['GET', 'POST', 'OPTIONS']
           allowedHeaders     : ['*']
           allowCredentials   : false
         }
@@ -85,13 +110,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu   : '0.5'
             memory: '1Gi'
           }
-          env: [
-            { name: 'PORT',            value: '8000' }
-            { name: 'FLASK_DEBUG',     value: 'false' }
-            { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
-            { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
-            { name: 'AZURE_CLIENT_ID', value: uaMI.properties.clientId }
-          ]
+          env: containerEnv
         }
       ]
       scale: {

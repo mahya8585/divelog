@@ -92,7 +92,14 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `ALLOWED_ORIGINS` | `*` | CORS 許可オリジン（カンマ区切り複数可） |
 | `COSMOS_ENDPOINT` | — | Cosmos DB エンドポイント URL |
 | `COSMOS_KEY` | — | Cosmos DB 主キー（ローカル開発用。本番は Entra ID RBAC 認証を使用） |
+| `COSMOS_DATABASE` | `divelog` | Cosmos DB データベース名 |
+| `COSMOS_CONTAINER` | `dives` | ダイブデータコンテナ名 |
+| `COSMOS_USERS_CONTAINER` | `users` | ユーザー認証情報コンテナ名 |
+| `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
 | `JSON_DIR` | `workflow/json/` | JSON フォールバックディレクトリパス |
+| `AUTH_EMAIL` | — | 管理者メールアドレス（Cosmos DB 設定時は初回シード用、未設定時はフォールバック認証用） |
+| `AUTH_PASSWORD` | — | 管理者パスワード（同上） |
+| `SECRET_KEY` | ランダム生成 | トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用） |
 
 ### フロントエンド (`frontend/.env.example`)
 

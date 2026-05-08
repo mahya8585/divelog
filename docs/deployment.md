@@ -170,6 +170,9 @@ az ad app federated-credential create --id <appId> --parameters '{
 | `backendImage` | プレースホルダーイメージ | バックエンドコンテナイメージ |
 | `backendMaxReplicas` | `3` | Container Apps 最大レプリカ数 |
 | `staticWebAppLocation` | `eastasia` | Static Web Apps のリージョン |
+| `secretKey` | (空) | 認証トークン署名用シークレットキー（`@secure()`） |
+| `authEmail` | (空) | 初回セットアップ用の管理者メールアドレス（`@secure()`） |
+| `authPassword` | (空) | 初回セットアップ用の管理者パスワード（`@secure()`） |
 
 ---
 
