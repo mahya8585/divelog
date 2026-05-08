@@ -13,14 +13,17 @@ Docker ビルド（プロジェクトルートから）:
     docker run -p 8000:8000 --env-file .env divelog-backend
 """
 
+import hmac
 import os
 import sys
 import tempfile
 from collections import Counter
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from itsdangerous import BadSignature, URLSafeSerializer
 from werkzeug.utils import secure_filename
 
 # backend/ ディレクトリを import パスに追加
@@ -49,6 +52,52 @@ app = Flask(__name__)
 # アップロードサイズ上限 (5 MB)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 
+# ── 認証設定 ──────────────────────────────────────────────
+_SECRET_KEY = os.environ.get("SECRET_KEY")
+if not _SECRET_KEY:
+    _SECRET_KEY = os.urandom(32).hex()
+    import warnings
+    warnings.warn(
+        "SECRET_KEY が設定されていません。起動ごとにランダムなキーを使用するため、"
+        "サーバー再起動後はすべてのトークンが無効になります。"
+        "本番環境では SECRET_KEY 環境変数を設定してください。",
+        stacklevel=1,
+    )
+_AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
+_AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+_signer = URLSafeSerializer(_SECRET_KEY)
+
+
+def _generate_token(email: str) -> str:
+    return _signer.dumps({"email": email})
+
+
+def _verify_token(token: str) -> bool:
+    try:
+        data = _signer.loads(token)
+        return bool(_AUTH_EMAIL) and data.get("email") == _AUTH_EMAIL
+    except (BadSignature, Exception):
+        return False
+
+
+def require_auth(f):
+    """認証が必要なエンドポイントに適用するデコレータ。
+    AUTH_EMAIL が未設定の場合は認証をスキップする（開発用）。
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _AUTH_EMAIL:
+            # 認証未設定の場合はスキップ（開発環境向け）
+            return f(*args, **kwargs)
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "認証が必要です"}), 401
+        token = auth_header[7:]
+        if not _verify_token(token):
+            return jsonify({"error": "認証が必要です"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
 # CORS: フロントエンドの URL を許可
 # 本番では ALLOWED_ORIGINS に Azure Static Web Apps の URL を設定する
 _default_origins = "http://localhost:5173" if os.environ.get("FLASK_DEBUG", "").lower() == "true" else ""
@@ -66,9 +115,32 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ── 認証エンドポイント ────────────────────────────────────
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    """メールアドレスとパスワードで認証し、トークンを返す。"""
+    if not _AUTH_EMAIL:
+        return jsonify({"error": "認証が設定されていません。AUTH_EMAIL / AUTH_PASSWORD を設定してください。"}), 500
+    data = request.get_json(silent=True) or {}
+    email = data.get("email", "")
+    password = data.get("password", "")
+    # タイミング攻撃対策のため compare_digest を使用
+    try:
+        email_ok = hmac.compare_digest(email.encode("utf-8"), _AUTH_EMAIL.encode("utf-8"))
+        password_ok = hmac.compare_digest(password.encode("utf-8"), _AUTH_PASSWORD.encode("utf-8"))
+    except UnicodeEncodeError:
+        email_ok = password_ok = False
+    if not (email_ok and password_ok):
+        return jsonify({"error": "メールアドレスまたはパスワードが正しくありません"}), 401
+    token = _generate_token(email)
+    return jsonify({"token": token})
+
+
 # ── API エンドポイント ────────────────────────────────────
 
 @app.route("/api/dives", methods=["GET"])
+@require_auth
 def get_dives():
     """
     ダイブ一覧を返す。
@@ -121,6 +193,7 @@ def get_dives():
 
 
 @app.route("/api/dives/upload", methods=["POST"])
+@require_auth
 def upload_dive():
     """ZXU ファイルをアップロードしてダイブデータを登録する。"""
     if "file" not in request.files:
@@ -159,6 +232,7 @@ def upload_dive():
 
 
 @app.route("/api/dives/<dive_id>", methods=["GET"])
+@require_auth
 def get_dive(dive_id: str):
     """指定 ID のダイブ詳細を返す。"""
     # dive_id の簡易バリデーション（パストラバーサル対策）
