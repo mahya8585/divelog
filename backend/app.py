@@ -15,6 +15,7 @@ Docker ビルド（プロジェクトルートから）:
 
 import hmac
 import os
+import re
 import secrets
 import sys
 import tempfile
@@ -27,17 +28,16 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from werkzeug.security import check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-# backend/ ディレクトリを import パスに追加
 sys.path.insert(0, str(Path(__file__).parent))
-# プロジェクトルートを import パスに追加 (workflow モジュールのため)
 _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# .env ファイルが存在すれば読み込む
+# .env (任意)
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent.parent / ".env")
@@ -54,9 +54,8 @@ from data import (
     load_all_dives,
     load_dive,
     save_dive,
+    save_zxu_upload,
     save_token,
-    search_dives,
-    seed_user_if_needed,
 )
 
 try:
@@ -64,21 +63,35 @@ try:
 except ImportError:
     _convert_zxu = None
 
+# dive_id バリデーション用パターン（data._validate_dive_id と同一）
+_DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+
 app = Flask(__name__)
 
-# レートリミッター（ブルートフォース対策）
+# ── プロキシ配下（Container Apps / SWA Front Door）の X-Forwarded-* を信頼 ──
+_TRUST_PROXY_HOPS = int(os.environ.get("TRUST_PROXY_HOPS", "1"))
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=_TRUST_PROXY_HOPS,
+    x_proto=_TRUST_PROXY_HOPS,
+    x_host=_TRUST_PROXY_HOPS,
+    x_port=_TRUST_PROXY_HOPS,
+    x_prefix=_TRUST_PROXY_HOPS,
+)
+
+# レートリミッター（ブルートフォース対策 / DoS 緩和）
+# NOTE: storage_uri は本番では Redis 等の共有ストアに変更すること（複数レプリカで状態が分裂するため）。
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=[],
-    storage_uri="memory://",
+    default_limits=["200 per minute"],
+    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
 )
 
-# アップロードサイズ上限 (5 MB)
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+# アップロードサイズ上限 (Cosmos ドキュメント上限 2MB に合わせる)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 # ── 認証設定 ──────────────────────────────────────────────
-# ローカル開発向けフォールバック用（Cosmos DB 未設定時のみ使用）
 _SECRET_KEY = os.environ.get("SECRET_KEY")
 if not _SECRET_KEY:
     _SECRET_KEY = os.urandom(32).hex()
@@ -89,50 +102,44 @@ if not _SECRET_KEY:
         "本番環境では SECRET_KEY 環境変数を設定してください。",
         stacklevel=1,
     )
+
+# ローカル開発フォールバック用認証情報（Cosmos 未使用時のみ有効）
 _AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
 _AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+# 認証スキップを許可する明示フラグ（誤設定でのバイパスを防ぐ）
+_AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").lower() == "true"
+
 _TOKEN_MAX_AGE = 10 * 60  # 10 分
 _signer = URLSafeTimedSerializer(_SECRET_KEY)
 
-# Cosmos DB が設定されている場合: 初回起動時に AUTH_EMAIL/AUTH_PASSWORD からユーザーを作成
-with app.app_context():
-    if _use_cosmos() and _AUTH_EMAIL and _AUTH_PASSWORD:
-        try:
-            seed_user_if_needed(_AUTH_EMAIL, _AUTH_PASSWORD)
-            app.logger.info(
-                "ユーザーシードが完了しました。セキュリティのため、"
-                "初回セットアップ後は AUTH_EMAIL / AUTH_PASSWORD 環境変数を削除することを推奨します。"
-            )
-        except Exception as _e:
-            app.logger.warning("ユーザーシード処理に失敗しました: %s", _e)
+# タイミング攻撃対策用ダミーハッシュ（プロセス起動時に固定）
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
 
 
 def _generate_token_signed(email: str) -> str:
-    """itsdangerous 署名トークンを生成する（フォールバック用）。"""
     return _signer.dumps({"email": email})
 
 
 def _verify_token_signed(token: str) -> bool:
-    """itsdangerous 署名トークンを検証する（フォールバック用）。
-    max_age で有効期限を強制する。
-    """
     try:
         data = _signer.loads(token, max_age=_TOKEN_MAX_AGE)
-        return bool(_AUTH_EMAIL) and data.get("email") == _AUTH_EMAIL
-    except (BadSignature, SignatureExpired, Exception):
+    except (BadSignature, SignatureExpired):
         return False
+    except Exception:
+        app.logger.exception("署名トークン検証で予期しない例外")
+        return False
+    return bool(_AUTH_EMAIL) and data.get("email") == _AUTH_EMAIL
 
 
 def require_auth(f):
-    """認証が必要なエンドポイントに適用するデコレータ。
-    - Cosmos DB 設定時: tokens コンテナでトークンを検証
-    - 未設定時: itsdangerous 署名トークンで検証（開発用）
-    AUTH_EMAIL が未設定かつ Cosmos DB も未設定の場合は認証をスキップする。
+    """認証デコレータ。
+    - AUTH_DISABLED=true の場合のみスキップ（明示フラグ必須）。
+    - Cosmos 設定時: tokens コンテナで検証
+    - 未設定時:    itsdangerous 署名トークンで検証
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not _AUTH_EMAIL and not _use_cosmos():
-            # 認証未設定の場合はスキップ（開発環境向け）
+        if _AUTH_DISABLED:
             return f(*args, **kwargs)
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -147,19 +154,29 @@ def require_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# CORS: フロントエンドの URL を許可
-# 本番では ALLOWED_ORIGINS に Azure Static Web Apps の URL を設定する
+
+# CORS: 本番では ALLOWED_ORIGINS を必須とし、未設定なら拒否（フェイルクローズ）
 _default_origins = "http://localhost:5173" if os.environ.get("FLASK_DEBUG", "").lower() == "true" else ""
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", _default_origins)
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", _default_origins).strip()
 if allowed_origins:
-    CORS(app, origins=allowed_origins.split(","))
+    CORS(
+        app,
+        origins=[o.strip() for o in allowed_origins.split(",") if o.strip()],
+        supports_credentials=False,
+        allow_headers=["Authorization", "Content-Type"],
+        methods=["GET", "POST", "OPTIONS"],
+    )
 else:
-    CORS(app)
+    # ALLOWED_ORIGINS 未設定時は CORS を一切許可しない（同一オリジンのみ）
+    app.logger.warning(
+        "ALLOWED_ORIGINS が未設定です。クロスオリジンリクエストはすべて拒否されます。"
+    )
 
 
 # ── ヘルスチェック ────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
+@limiter.exempt
 def health():
     return jsonify({"status": "ok"})
 
@@ -169,15 +186,16 @@ def health():
 @app.route("/api/login", methods=["POST"])
 @limiter.limit("5 per minute")
 def login():
-    """メールアドレスとパスワードで認証し、トークンを返す。"""
     data = request.get_json(silent=True) or {}
-    email    = data.get("email", "")
-    password = data.get("password", "")
+    email    = (data.get("email") or "").strip()
+    password = data.get("password") or ""
 
     if _use_cosmos():
-        # ── Cosmos DB バックエンド ─────────────────────────
         user = get_user(email)
-        if user is None or not check_password_hash(user.get("password_hash", ""), password):
+        # タイミング攻撃対策: ユーザー不在でも check_password_hash を回す
+        stored_hash = user.get("password_hash", "") if user else _DUMMY_PASSWORD_HASH
+        password_ok = check_password_hash(stored_hash, password)
+        if user is None or not password_ok:
             return jsonify({"error": "メールアドレスまたはパスワードが正しくありません"}), 401
         token = secrets.token_urlsafe(32)
         try:
@@ -187,9 +205,9 @@ def login():
             return jsonify({"error": "ログイン処理に失敗しました"}), 500
         return jsonify({"token": token})
 
-    # ── ローカル開発向けフォールバック（環境変数） ──────────
+    # ローカル開発フォールバック
     if not _AUTH_EMAIL:
-        return jsonify({"error": "認証が設定されていません。AUTH_EMAIL / AUTH_PASSWORD を設定してください。"}), 500
+        return jsonify({"error": "認証が設定されていません"}), 500
     try:
         email_ok    = hmac.compare_digest(email.encode("utf-8"),    _AUTH_EMAIL.encode("utf-8"))
         password_ok = hmac.compare_digest(password.encode("utf-8"), _AUTH_PASSWORD.encode("utf-8"))
@@ -204,7 +222,6 @@ def login():
 @app.route("/api/logout", methods=["POST"])
 @require_auth
 def logout():
-    """トークンを無効化してログアウトする。"""
     if _use_cosmos():
         auth_header = request.headers.get("Authorization", "")
         token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
@@ -220,11 +237,9 @@ def logout():
 
 @app.route("/api/dives", methods=["GET"])
 @require_auth
+@limiter.limit("60 per minute")
 def get_dives():
-    """
-    ダイブ一覧を返す。
-    クエリパラメータ: tag, year, month, location
-    """
+    from data import search_dives
     tag      = request.args.get("tag",      "").strip() or None
     year_s   = request.args.get("year",     "").strip()
     month_s  = request.args.get("month",    "").strip()
@@ -273,8 +288,8 @@ def get_dives():
 
 @app.route("/api/dives/upload", methods=["POST"])
 @require_auth
+@limiter.limit("10 per minute")
 def upload_dive():
-    """ZXU ファイルをアップロードしてダイブデータを登録する。"""
     if "file" not in request.files:
         return jsonify({"error": "ファイルが見つかりません"}), 400
 
@@ -288,6 +303,20 @@ def upload_dive():
 
     tmp_path = None
     try:
+        if _use_cosmos():
+            raw = uploaded_file.read()
+            if not raw:
+                return jsonify({"error": "ファイルが空です"}), 400
+            try:
+                zxu_text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return jsonify({"error": "ZXU ファイルの文字コードが不正です"}), 400
+            upload_id = save_zxu_upload(zxu_text, filename)
+            return jsonify({
+                "upload_id": upload_id,
+                "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。",
+            }), 202
+
         with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
             tmp_path = tmp.name
             uploaded_file.save(tmp_path)
@@ -312,20 +341,26 @@ def upload_dive():
 
 @app.route("/api/dives/<dive_id>", methods=["GET"])
 @require_auth
+@limiter.limit("60 per minute")
 def get_dive(dive_id: str):
-    """指定 ID のダイブ詳細を返す。"""
-    # dive_id の簡易バリデーション（パストラバーサル対策）
-    if not dive_id.replace("_", "").isalnum():
+    if not _DIVE_ID_RE.fullmatch(dive_id):
         return jsonify({"error": "Invalid dive_id"}), 400
     try:
         dive = load_dive(dive_id)
     except FileNotFoundError:
         return jsonify({"error": "Dive not found"}), 404
     except Exception:
+        app.logger.exception("ダイブ詳細取得でエラー")
         return jsonify({"error": "Internal server error"}), 500
 
     tags = extract_tags(dive.get("memo") or "")
     return jsonify({"dive": dive, "tags": tags})
+
+
+# 413 (アップロードサイズ超過) 等もハンドル
+@app.errorhandler(413)
+def request_too_large(_e):
+    return jsonify({"error": "ファイルサイズが大きすぎます (最大 2MB)"}), 413
 
 
 if __name__ == "__main__":

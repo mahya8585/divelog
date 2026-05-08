@@ -119,11 +119,17 @@ async function doUpload() {
   wasOverwritten.value = false
   try {
     const result = await uploadDive(selectedFile.value)
-    registeredId.value = result.dive_id
-    wasOverwritten.value = !!result.overwritten
-    successMsg.value = result.overwritten
-      ? `既存のダイブログを上書きしました（ID: ${result.dive_id}）`
-      : `登録が完了しました（ID: ${result.dive_id}）`
+    if (result.dive_id) {
+      registeredId.value = result.dive_id
+      wasOverwritten.value = !!result.overwritten
+      successMsg.value = result.overwritten
+        ? `既存のダイブログを上書きしました（ID: ${result.dive_id}）`
+        : `登録が完了しました（ID: ${result.dive_id}）`
+    } else if (result.upload_id) {
+      successMsg.value = `${result.message}（受付ID: ${result.upload_id}）`
+    } else {
+      successMsg.value = result.message || 'アップロードを受け付けました。'
+    }
     selectedFile.value = null
     if (fileInputRef.value) fileInputRef.value.value = ''
   } catch (e) {

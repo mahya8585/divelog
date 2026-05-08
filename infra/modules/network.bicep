@@ -15,6 +15,7 @@ param cosmosAccountName string
 var vnetAddressPrefix = '10.0.0.0/16'
 var caSubnetPrefix    = '10.0.0.0/23'   // /23 = Container Apps 環境に必要な最小サイズ
 var peSubnetPrefix    = '10.0.2.0/24'   // プライベートエンドポイント用
+var fnSubnetPrefix    = '10.0.3.0/24'   // Function App (Flex Consumption) アウトバウンド統合用
 
 // ── VNet ─────────────────────────────────────────────────
 resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
@@ -43,6 +44,20 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
         name: 'private-endpoints-subnet'
         properties: {
           addressPrefix: peSubnetPrefix
+        }
+      }
+      {
+        name: 'function-app-subnet'
+        properties: {
+          addressPrefix: fnSubnetPrefix
+          delegations: [
+            {
+              name: 'Microsoft.App.environments'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
         }
       }
     ]
@@ -109,3 +124,4 @@ resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneG
 output vnetId             string = vnet.id
 output caSubnetId         string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'container-apps-subnet')
 output peSubnetId         string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'private-endpoints-subnet')
+output fnSubnetId         string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'function-app-subnet')

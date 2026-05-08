@@ -1,0 +1,56 @@
+name: Deploy Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'functions/**'
+      - 'workflow/convert_zxu_to_json.py'
+      - '.github/workflows/deploy-functions.yml'
+  workflow_dispatch:
+
+env:
+  AZURE_RESOURCE_GROUP: rg-divelogsite
+  FUNCTION_APP_NAME: func-divelog
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Stage function package
+        run: |
+          mkdir -p ./.deploy/functions
+          # Functions コード本体（function_app.py / host.json / requirements.txt 等）
+          cp -r functions/. ./.deploy/functions/
+          # convert_zxu_to_json.py をフラット配置で同梱
+          # （function_app.py から `import convert_zxu_to_json` で参照可能にする）
+          cp workflow/convert_zxu_to_json.py ./.deploy/functions/
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.FUNCTION_APP_NAME }}
+          package: ./.deploy/functions
+          # Flex Consumption では Oryx によるリモートビルドで requirements.txt から依存解決する
+          scm-do-build-during-deployment: true
+          enable-oryx-build: true
+          remote-build: true

@@ -8,6 +8,8 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from pathlib import Path
 
 # ── パス ────────────────────────────────────────────────
@@ -22,6 +24,7 @@ COSMOS_DATABASE         = os.environ.get("COSMOS_DATABASE", "divelog")
 COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
 COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
 COSMOS_TOKENS_CONTAINER = os.environ.get("COSMOS_TOKENS_CONTAINER", "tokens")
+COSMOS_ZXU_CONTAINER    = os.environ.get("COSMOS_ZXU_CONTAINER", "zxu_uploads")
 
 # トークン有効期限（秒）: 10 分
 TOKEN_TTL_SECONDS = 10 * 60
@@ -72,6 +75,16 @@ def _get_container():
     db = client.get_database_client(COSMOS_DATABASE)
     return db.create_container_if_not_exists(
         id=COSMOS_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+    )
+
+
+def _get_zxu_container():
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_ZXU_CONTAINER,
         partition_key=PartitionKey(path="/id"),
     )
 
@@ -137,11 +150,21 @@ def extract_tags(memo: str) -> list[str]:
 
 
 def dive_exists(dive_id: str) -> bool:
-    """指定 ID のダイブデータが存在するかを返す。"""
+    """指定 ID のダイブデータが存在するかを返す。
+    存在しない場合のみ False。その他の例外はそのまま伝搬し、
+    「ネットワークエラーだが上書きされる」という誤動作を防ぐ。
+    """
+    if _use_cosmos():
+        from azure.cosmos.exceptions import CosmosResourceNotFoundError
+        try:
+            _load_one_from_cosmos(dive_id)
+            return True
+        except CosmosResourceNotFoundError:
+            return False
     try:
-        load_dive(dive_id)
+        _load_one_from_json(dive_id)
         return True
-    except (FileNotFoundError, Exception):
+    except FileNotFoundError:
         return False
 
 
@@ -155,6 +178,22 @@ def save_dive(dive_data: dict) -> str:
     else:
         _save_to_json(dive_data)
     return dive_id
+
+
+def save_zxu_upload(zxu_text: str, filename: str) -> str:
+    """ZXU 生データを Cosmos DB に保存し、アップロード ID を返す。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    upload_id = str(uuid4())
+    container = _get_zxu_container()
+    container.create_item({
+        "id": upload_id,
+        "filename": filename,
+        "zxu_text": zxu_text,
+        "status": "uploaded",
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return upload_id
 
 
 def search_dives(
@@ -265,17 +304,26 @@ def save_token(token: str, email: str) -> None:
 
 def get_token_email(token: str) -> str | None:
     """トークンに対応するメールアドレスを返す。存在しない / 期限切れの場合は None。
-    Cosmos DB の TTL で自動削除されるが、削除タイミングの遅延に備えて expires_at も確認する。
+    Cosmos DB の TTL で自動削除されるが、削除タイミングの遅延に備えて expires_at も確認し、
+    期限切れを検知したトークンは明示的に削除して再利用を妨げる。
     """
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
         container = _get_tokens_container()
         tid = _token_id(token)
         item = container.read_item(item=tid, partition_key=tid)
-        if item.get("expires_at", 0) < time.time():
-            return None
-        return item.get("email")
+    except CosmosResourceNotFoundError:
+        return None
     except Exception:
         return None
+    if item.get("expires_at", 0) < time.time():
+        # 期限切れトークンは明示的に削除
+        try:
+            container.delete_item(item=tid, partition_key=tid)
+        except Exception:
+            pass
+        return None
+    return item.get("email")
 
 
 def delete_token(token: str) -> None:
