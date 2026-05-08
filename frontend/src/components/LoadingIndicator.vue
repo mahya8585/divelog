@@ -33,7 +33,10 @@ defineProps({
 .loading-indicator {
   --indicator-mid: var(--ocean-mid, #1a5f8a);
   --indicator-teal: var(--ocean-teal, #00b4d8);
-  --antenna-stroke-width: 3.2;
+  --line-stroke-width: 3.2;
+  --crawl-start-x: -28%;
+  --crawl-mid-x: 58%;
+  --crawl-end-x: 138%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -63,7 +66,7 @@ defineProps({
 .body-stripe,
 .antenna {
   stroke: var(--indicator-teal);
-  stroke-width: var(--antenna-stroke-width);
+  stroke-width: var(--line-stroke-width);
   stroke-linecap: round;
   fill: none;
 }
@@ -76,9 +79,9 @@ defineProps({
 }
 
 @keyframes crawl-right {
-  0%   { transform: translateX(-28%); }
-  50%  { transform: translateX(58%); }
-  100% { transform: translateX(138%); }
+  0%   { transform: translateX(var(--crawl-start-x)); }
+  50%  { transform: translateX(var(--crawl-mid-x)); }
+  100% { transform: translateX(var(--crawl-end-x)); }
 }
 
 @keyframes wiggle {
