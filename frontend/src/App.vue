@@ -1,5 +1,8 @@
 <template>
-  <div class="d-flex flex-column min-vh-100">
+  <!-- ログイン画面はレイアウトなしで直接表示 -->
+  <router-view v-if="isLoginPage" />
+
+  <div v-else class="d-flex flex-column min-vh-100">
     <nav class="navbar navbar-dark bg-ocean py-2">
       <div class="container d-flex align-items-center">
         <!-- ハンバーガーメニュー -->
@@ -9,6 +12,11 @@
         <router-link class="navbar-brand fw-bold mb-0" to="/">
           <i class="bi bi-water me-2"></i>Dive Log
         </router-link>
+        <div class="ms-auto">
+          <button class="btn btn-link text-white p-0 logout-btn" @click="doLogout" :title="'ログアウト'">
+            <i class="bi bi-box-arrow-right"></i>
+          </button>
+        </div>
       </div>
     </nav>
 
@@ -33,6 +41,9 @@
           <router-link to="/upload" class="side-menu-item" @click="menuOpen = false">
             <i class="bi bi-cloud-upload me-2"></i>ダイブログ登録
           </router-link>
+          <button class="side-menu-item side-menu-logout btn btn-link w-100 text-start" @click="doLogout">
+            <i class="bi bi-box-arrow-right me-2"></i>ログアウト
+          </button>
         </nav>
       </aside>
     </Transition>
@@ -48,8 +59,20 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { useAuth } from './composables/useAuth.js'
+
+const route    = useRoute()
 const menuOpen = ref(false)
+const { logout } = useAuth()
+
+const isLoginPage = computed(() => route.path === '/login')
+
+function doLogout() {
+  menuOpen.value = false
+  logout()
+}
 </script>
 
 <style>
@@ -201,6 +224,16 @@ body {
 }
 .hamburger-btn:focus { box-shadow: none; }
 
+/* ログアウトボタン (ナビバー右端) */
+.logout-btn {
+  text-decoration: none !important;
+  line-height: 1;
+  font-size: 1.1rem;
+  opacity: .85;
+}
+.logout-btn:hover { opacity: 1; }
+.logout-btn:focus { box-shadow: none; }
+
 /* オーバーレイ */
 .menu-overlay {
   position: fixed;
@@ -248,6 +281,17 @@ body {
 .side-menu-item.router-link-exact-active {
   background: rgba(0, 180, 216, .18);
   color: var(--ocean-teal);
+}
+
+/* サイドメニュー ログアウトボタン */
+.side-menu-logout {
+  color: rgba(255, 255, 255, .85);
+  background: none;
+  border: none;
+  font-size: .95rem;
+  text-decoration: none;
+  padding: .75rem 1.25rem;
+  cursor: pointer;
 }
 
 /* トランジション: スライド */

@@ -5,6 +5,16 @@
 
 ---
 
+## 認証
+
+`/api/login` と `/health` 以外のすべてのエンドポイントは認証が必要です。
+
+リクエストヘッダーに `Authorization: Bearer <token>` を含めてください。トークンは `/api/login` で取得できます。
+
+> **Note**: `AUTH_EMAIL` が未設定かつ Cosmos DB も未設定の場合（ローカル開発時）、認証はスキップされます。
+
+---
+
 ## `GET /health`
 
 ヘルスチェック。Container Apps のライブネスプローブ用。
@@ -14,6 +24,63 @@
 ```json
 { "status": "ok" }
 ```
+
+---
+
+## `POST /api/login`
+
+メールアドレスとパスワードで認証し、Bearer トークンを返す。
+
+### リクエスト
+
+```json
+{
+  "email": "user@example.com",
+  "password": "your-password"
+}
+```
+
+### レスポンス（成功: 200 OK）
+
+```json
+{
+  "token": "xxxxxxxx..."
+}
+```
+
+### エラーレスポンス
+
+| ステータス | 説明 |
+|---|---|
+| `401 Unauthorized` | メールアドレスまたはパスワードが正しくない |
+| `500 Internal Server Error` | 認証が未設定、またはトークン保存に失敗 |
+
+---
+
+## `POST /api/logout`
+
+トークンを無効化してログアウトする。
+
+### リクエスト
+
+```http
+POST /api/logout
+Authorization: Bearer <token>
+```
+
+### レスポンス（成功: 200 OK）
+
+```json
+{
+  "message": "ログアウトしました"
+}
+```
+
+### エラーレスポンス
+
+| ステータス | 説明 |
+|---|---|
+| `401 Unauthorized` | トークンが無効または未指定 |
 
 ---
 

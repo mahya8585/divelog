@@ -13,14 +13,21 @@ Docker ビルド（プロジェクトルートから）:
     docker run -p 8000:8000 --env-file .env divelog-backend
 """
 
+import hmac
 import os
+import secrets
 import sys
 import tempfile
 from collections import Counter
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 
 # backend/ ディレクトリを import パスに追加
@@ -37,7 +44,20 @@ try:
 except ImportError:
     pass
 
-from data import dive_exists, extract_tags, load_all_dives, load_dive, save_dive, search_dives
+from data import (
+    _use_cosmos,
+    delete_token,
+    dive_exists,
+    extract_tags,
+    get_token_email,
+    get_user,
+    load_all_dives,
+    load_dive,
+    save_dive,
+    save_token,
+    search_dives,
+    seed_user_if_needed,
+)
 
 try:
     from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu
@@ -46,8 +66,86 @@ except ImportError:
 
 app = Flask(__name__)
 
+# レートリミッター（ブルートフォース対策）
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
 # アップロードサイズ上限 (5 MB)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
+# ── 認証設定 ──────────────────────────────────────────────
+# ローカル開発向けフォールバック用（Cosmos DB 未設定時のみ使用）
+_SECRET_KEY = os.environ.get("SECRET_KEY")
+if not _SECRET_KEY:
+    _SECRET_KEY = os.urandom(32).hex()
+    import warnings
+    warnings.warn(
+        "SECRET_KEY が設定されていません。起動ごとにランダムなキーを使用するため、"
+        "サーバー再起動後はすべてのトークンが無効になります。"
+        "本番環境では SECRET_KEY 環境変数を設定してください。",
+        stacklevel=1,
+    )
+_AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
+_AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+_TOKEN_MAX_AGE = 10 * 60  # 10 分
+_signer = URLSafeTimedSerializer(_SECRET_KEY)
+
+# Cosmos DB が設定されている場合: 初回起動時に AUTH_EMAIL/AUTH_PASSWORD からユーザーを作成
+with app.app_context():
+    if _use_cosmos() and _AUTH_EMAIL and _AUTH_PASSWORD:
+        try:
+            seed_user_if_needed(_AUTH_EMAIL, _AUTH_PASSWORD)
+            app.logger.info(
+                "ユーザーシードが完了しました。セキュリティのため、"
+                "初回セットアップ後は AUTH_EMAIL / AUTH_PASSWORD 環境変数を削除することを推奨します。"
+            )
+        except Exception as _e:
+            app.logger.warning("ユーザーシード処理に失敗しました: %s", _e)
+
+
+def _generate_token_signed(email: str) -> str:
+    """itsdangerous 署名トークンを生成する（フォールバック用）。"""
+    return _signer.dumps({"email": email})
+
+
+def _verify_token_signed(token: str) -> bool:
+    """itsdangerous 署名トークンを検証する（フォールバック用）。
+    max_age で有効期限を強制する。
+    """
+    try:
+        data = _signer.loads(token, max_age=_TOKEN_MAX_AGE)
+        return bool(_AUTH_EMAIL) and data.get("email") == _AUTH_EMAIL
+    except (BadSignature, SignatureExpired, Exception):
+        return False
+
+
+def require_auth(f):
+    """認証が必要なエンドポイントに適用するデコレータ。
+    - Cosmos DB 設定時: tokens コンテナでトークンを検証
+    - 未設定時: itsdangerous 署名トークンで検証（開発用）
+    AUTH_EMAIL が未設定かつ Cosmos DB も未設定の場合は認証をスキップする。
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _AUTH_EMAIL and not _use_cosmos():
+            # 認証未設定の場合はスキップ（開発環境向け）
+            return f(*args, **kwargs)
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "認証が必要です"}), 401
+        token = auth_header[7:]
+        if _use_cosmos():
+            if get_token_email(token) is None:
+                return jsonify({"error": "認証が必要です"}), 401
+        else:
+            if not _verify_token_signed(token):
+                return jsonify({"error": "認証が必要です"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # CORS: フロントエンドの URL を許可
 # 本番では ALLOWED_ORIGINS に Azure Static Web Apps の URL を設定する
@@ -66,9 +164,62 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ── 認証エンドポイント ────────────────────────────────────
+
+@app.route("/api/login", methods=["POST"])
+@limiter.limit("5 per minute")
+def login():
+    """メールアドレスとパスワードで認証し、トークンを返す。"""
+    data = request.get_json(silent=True) or {}
+    email    = data.get("email", "")
+    password = data.get("password", "")
+
+    if _use_cosmos():
+        # ── Cosmos DB バックエンド ─────────────────────────
+        user = get_user(email)
+        if user is None or not check_password_hash(user.get("password_hash", ""), password):
+            return jsonify({"error": "メールアドレスまたはパスワードが正しくありません"}), 401
+        token = secrets.token_urlsafe(32)
+        try:
+            save_token(token, email)
+        except Exception:
+            app.logger.exception("トークン保存に失敗しました")
+            return jsonify({"error": "ログイン処理に失敗しました"}), 500
+        return jsonify({"token": token})
+
+    # ── ローカル開発向けフォールバック（環境変数） ──────────
+    if not _AUTH_EMAIL:
+        return jsonify({"error": "認証が設定されていません。AUTH_EMAIL / AUTH_PASSWORD を設定してください。"}), 500
+    try:
+        email_ok    = hmac.compare_digest(email.encode("utf-8"),    _AUTH_EMAIL.encode("utf-8"))
+        password_ok = hmac.compare_digest(password.encode("utf-8"), _AUTH_PASSWORD.encode("utf-8"))
+    except UnicodeEncodeError:
+        email_ok = password_ok = False
+    if not (email_ok and password_ok):
+        return jsonify({"error": "メールアドレスまたはパスワードが正しくありません"}), 401
+    token = _generate_token_signed(email)
+    return jsonify({"token": token})
+
+
+@app.route("/api/logout", methods=["POST"])
+@require_auth
+def logout():
+    """トークンを無効化してログアウトする。"""
+    if _use_cosmos():
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+        if token:
+            try:
+                delete_token(token)
+            except Exception:
+                app.logger.warning("トークン削除に失敗しました（続行）")
+    return jsonify({"message": "ログアウトしました"})
+
+
 # ── API エンドポイント ────────────────────────────────────
 
 @app.route("/api/dives", methods=["GET"])
+@require_auth
 def get_dives():
     """
     ダイブ一覧を返す。
@@ -121,6 +272,7 @@ def get_dives():
 
 
 @app.route("/api/dives/upload", methods=["POST"])
+@require_auth
 def upload_dive():
     """ZXU ファイルをアップロードしてダイブデータを登録する。"""
     if "file" not in request.files:
@@ -159,6 +311,7 @@ def upload_dive():
 
 
 @app.route("/api/dives/<dive_id>", methods=["GET"])
+@require_auth
 def get_dive(dive_id: str):
     """指定 ID のダイブ詳細を返す。"""
     # dive_id の簡易バリデーション（パストラバーサル対策）

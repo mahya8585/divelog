@@ -1,6 +1,7 @@
 /*
   divelog — メインテンプレート (本番専用)
   ┌─────────────────────────────────────────────────┐
+  │  Azure VNet + プライベートエンドポイント         │
   │  Azure Container Registry (ACR) Basic           │
   │  Azure Container Apps (バックエンド Flask API)   │
   │  Azure Static Web Apps Free (フロントエンド)    │
@@ -31,9 +32,22 @@ param backendMaxReplicas int = 3
 @description('Static Web Apps のリージョン（限られたリージョンのみ対応）')
 param staticWebAppLocation string = 'eastasia'
 
+@description('認証トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用）')
+@secure()
+param secretKey string = ''
+
+@description('初回セットアップ用の管理者メールアドレス（users コンテナへのシード用）')
+@secure()
+param authEmail string = ''
+
+@description('初回セットアップ用の管理者パスワード（users コンテナへのシード用）')
+@secure()
+param authPassword string = ''
+
 // ── 変数 ───────────────────────────────────────────────────
-var acrName = replace('acr${appName}', '-', '')                        // ACR 名は英数小文字のみ
-var kvName  = 'kv-${appName}-${take(uniqueString(resourceGroup().id), 6)}'  // グローバル一意
+var acrName  = replace('acr${appName}', '-', '')                        // ACR 名は英数小文字のみ
+var kvName   = 'kv-${appName}-${take(uniqueString(resourceGroup().id), 6)}'  // グローバル一意
+var vnetName = 'vnet-${appName}'
 
 // ── モジュール ─────────────────────────────────────────────
 
@@ -46,17 +60,7 @@ module acr 'modules/containerRegistry.bicep' = {
   }
 }
 
-// 2. Log Analytics + Container Apps 環境
-module caEnv 'modules/containerAppsEnv.bicep' = {
-  name: 'ca-env'
-  params: {
-    name    : 'cae-${appName}'
-    location: location
-    logName : 'log-${appName}'
-  }
-}
-
-// 3. Cosmos DB Serverless（常時デプロイ）
+// 2. Cosmos DB Serverless（VNet/PE より先に作成）
 module cosmos 'modules/cosmosDb.bicep' = {
   name: 'cosmos'
   params: {
@@ -67,18 +71,39 @@ module cosmos 'modules/cosmosDb.bicep' = {
   }
 }
 
-// 4. Key Vault（Cosmos DB キーを格納）
+// 3. VNet + プライベートエンドポイント（Cosmos DB 用）
+module network 'modules/network.bicep' = {
+  name: 'network'
+  params: {
+    vnetName        : vnetName
+    location        : location
+    cosmosAccountId : cosmos.outputs.accountId
+    cosmosAccountName: 'cosmos-${appName}'
+  }
+}
+
+// 4. Log Analytics + Container Apps 環境（VNet 統合）
+module caEnv 'modules/containerAppsEnv.bicep' = {
+  name: 'ca-env'
+  params: {
+    name                   : 'cae-${appName}'
+    location               : location
+    logName                : 'log-${appName}'
+    infrastructureSubnetId : network.outputs.caSubnetId
+  }
+}
+
+// 5. Key Vault（シークレット格納用）
 module kv 'modules/keyVault.bicep' = {
   name: 'keyvault'
   params: {
     vaultName   : kvName
     location    : location
-    cosmosKey   : cosmos.outputs.primaryKey
   }
 }
 
-// 5. Azure Container Apps (バックエンド)
-//    Cosmos DB は Entra ID (RBAC) 認証で接続
+// 6. Azure Container Apps (バックエンド)
+//    Cosmos DB は Entra ID (RBAC) + プライベートエンドポイント経由で接続
 module backend 'modules/containerApp.bicep' = {
   name: 'backend'
   params: {
@@ -90,10 +115,13 @@ module backend 'modules/containerApp.bicep' = {
     acrId             : acr.outputs.acrId
     maxReplicas       : backendMaxReplicas
     cosmosEndpoint    : cosmos.outputs.endpoint
+    secretKey         : secretKey
+    authEmail         : authEmail
+    authPassword      : authPassword
   }
 }
 
-// 6. Azure Static Web Apps (フロントエンド) Free
+// 7. Azure Static Web Apps (フロントエンド) Free
 module frontend 'modules/staticWebApp.bicep' = {
   name: 'frontend'
   params: {

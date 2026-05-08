@@ -92,15 +92,37 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `ALLOWED_ORIGINS` | `*` | CORS 許可オリジン（カンマ区切り複数可） |
 | `COSMOS_ENDPOINT` | — | Cosmos DB エンドポイント URL |
 | `COSMOS_KEY` | — | Cosmos DB 主キー（ローカル開発用。本番は Entra ID RBAC 認証を使用） |
+| `COSMOS_DATABASE` | `divelog` | Cosmos DB データベース名 |
+| `COSMOS_CONTAINER` | `dives` | ダイブデータコンテナ名 |
+| `COSMOS_USERS_CONTAINER` | `users` | ユーザー認証情報コンテナ名 |
+| `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
 | `JSON_DIR` | `workflow/json/` | JSON フォールバックディレクトリパス |
+| `AUTH_EMAIL` | — | 管理者メールアドレス（Cosmos DB 設定時は初回シード用、未設定時はフォールバック認証用） |
+| `AUTH_PASSWORD` | — | 管理者パスワード（同上） |
+| `SECRET_KEY` | ランダム生成 | トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用。本番では固定値を設定推奨） |
+
+### バックエンド Python 依存パッケージ
+
+| パッケージ | 用途 |
+|---|---|
+| `flask` | Web フレームワーク |
+| `flask-cors` | CORS 制御 |
+| `flask-limiter` | レート制限（ログイン: 5回/分） |
+| `gunicorn` | 本番用 WSGI サーバー |
+| `azure-cosmos` | Cosmos DB SDK |
+| `azure-identity` | Entra ID 認証 (DefaultAzureCredential) |
+| `itsdangerous` | トークン署名（ローカル開発フォールバック） |
+| `werkzeug` | パスワードハッシュ (PBKDF2) |
+| `defusedxml` | XXE 対策付き XML パーサー |
 
 ### フロントエンド (`frontend/.env.example`)
 
 | 変数名 | 説明 |
 |---|---|
-| `VITE_API_BASE_URL` | バックエンド API の URL（例: `https://ca-divelog.<region>.azurecontainerapps.io`）|
+| `VITE_API_BASE_URL` | バックエンド API の URL（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）|
 
-> ローカル開発時は `VITE_API_BASE_URL` を設定不要です（Vite プロキシで `:8000` に転送）。
+> ローカル開発時は `VITE_API_BASE_URL` を設定不要です（Vite プロキシで `:8000` に転送）。  
+> 本番ビルド時は必ず環境変数として設定してください。`VITE_*` は Vite ビルド時に静的に埋め込まれるため、SWA の appsettings に設定しても実行時には反映されません。
 
 ---
 
