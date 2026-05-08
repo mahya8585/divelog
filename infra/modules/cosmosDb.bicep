@@ -41,8 +41,8 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
       defaultConsistencyLevel: 'Session'
     }
     enableFreeTier          : false
-    disableLocalAuth        : false    // キーベース認証を許可
-    publicNetworkAccess     : 'Enabled'
+    disableLocalAuth        : true     // マネージド ID 認証のみ許可（キー漏洩リスク排除）
+    publicNetworkAccess     : 'Disabled'  // プライベートエンドポイント経由のみアクセス可
     disableKeyBasedMetadataWriteAccess: false
   }
 }
@@ -108,5 +108,3 @@ resource tokensContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 
 output endpoint   string = cosmosAccount.properties.documentEndpoint
 output accountId  string = cosmosAccount.id
-@description('Cosmos DB 主キー（シークレット）')
-output primaryKey string = cosmosAccount.listKeys().primaryMasterKey

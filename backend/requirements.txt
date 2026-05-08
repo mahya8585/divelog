@@ -1,6 +1,7 @@
 # Web フレームワーク
 flask
 flask-cors
+flask-limiter
 python-dotenv
 gunicorn
 

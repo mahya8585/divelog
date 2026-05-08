@@ -1,14 +1,11 @@
 /*
   Azure Key Vault モジュール
-  - Cosmos DB 主キーをシークレットとして格納
+  - アプリケーションシークレットを安全に格納
   - Container App のマネージド ID は main.bicep でロール割り当て
 */
 
 param vaultName string
 param location  string
-
-@secure()
-param cosmosKey string
 
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name    : vaultName
@@ -26,17 +23,6 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enabledForDiskEncryption  : false
     enabledForTemplateDeployment: true
     publicNetworkAccess     : 'Enabled'
-  }
-}
-
-// Cosmos DB キーをシークレットとして格納
-resource cosmosKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name  : 'cosmos-key'
-  properties: {
-    value      : cosmosKey
-    contentType: 'text/plain'
-    attributes : { enabled: true }
   }
 }
 

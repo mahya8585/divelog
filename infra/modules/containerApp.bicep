@@ -64,10 +64,17 @@ var baseEnv = [
   { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
   { name: 'AZURE_CLIENT_ID', value: uaMI.properties.clientId }
 ]
-var secretKeyEnv   = !empty(secretKey)    ? [{ name: 'SECRET_KEY',    value: secretKey }]    : []
-var authEmailEnv   = !empty(authEmail)    ? [{ name: 'AUTH_EMAIL',    value: authEmail }]    : []
-var authPasswordEnv = !empty(authPassword) ? [{ name: 'AUTH_PASSWORD', value: authPassword }] : []
+var secretKeyEnv   = !empty(secretKey)    ? [{ name: 'SECRET_KEY',    secretRef: 'secret-key' }]    : []
+var authEmailEnv   = !empty(authEmail)    ? [{ name: 'AUTH_EMAIL',    secretRef: 'auth-email' }]    : []
+var authPasswordEnv = !empty(authPassword) ? [{ name: 'AUTH_PASSWORD', secretRef: 'auth-password' }] : []
 var containerEnv = concat(baseEnv, secretKeyEnv, authEmailEnv, authPasswordEnv)
+
+// シークレット定義（機密情報を平文で環境変数に置かない）
+var baseSecrets = []
+var secretKeySecret   = !empty(secretKey)    ? [{ name: 'secret-key',    value: secretKey }]    : []
+var authEmailSecret   = !empty(authEmail)    ? [{ name: 'auth-email',    value: authEmail }]    : []
+var authPasswordSecret = !empty(authPassword) ? [{ name: 'auth-password', value: authPassword }] : []
+var containerSecrets = concat(baseSecrets, secretKeySecret, authEmailSecret, authPasswordSecret)
 
 // ③ Container App 本体（ロール付与完了後に作成）
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -89,7 +96,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         corsPolicy : {
           allowedOrigins     : split(allowedOrigins, ',')
           allowedMethods     : ['GET', 'POST', 'OPTIONS']
-          allowedHeaders     : ['*']
+          allowedHeaders     : ['Authorization', 'Content-Type']
           allowCredentials   : false
         }
       }
@@ -99,7 +106,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: uaMI.id
         }
       ]
-      secrets: []
+      secrets: containerSecrets
     }
     template: {
       containers: [

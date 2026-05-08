@@ -6,6 +6,9 @@ param name     string
 param location string
 param logName  string
 
+@description('Container Apps 環境を配置する VNet サブネット ID（省略時は VNet 統合なし）')
+param infrastructureSubnetId string = ''
+
 // Log Analytics Workspace（Container Apps 環境に必須）
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name    : logName
@@ -30,6 +33,16 @@ resource caEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey : logAnalytics.listKeys().primarySharedKey
       }
     }
+    vnetConfiguration: !empty(infrastructureSubnetId) ? {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false
+    } : null
+    workloadProfiles: !empty(infrastructureSubnetId) ? [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ] : null
     zoneRedundant: false
   }
 }

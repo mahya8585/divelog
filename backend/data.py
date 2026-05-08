@@ -3,6 +3,7 @@
 優先順位: Azure Cosmos DB（環境変数設定時） → workflow/json/ フォールバック
 """
 
+import hashlib
 import json
 import os
 import re
@@ -241,14 +242,22 @@ def _get_tokens_container():
     )
 
 
+def _token_id(token: str) -> str:
+    """トークンの SHA-256 ハッシュを返す（Cosmos DB ドキュメント ID 用）。
+    生のトークン値を ID に使うとログ等から漏洩するリスクがあるため。
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def save_token(token: str, email: str) -> None:
     """トークンを Cosmos DB に保存する。
     コンテナの defaultTtl によってドキュメントは自動削除されるが、
     expires_at フィールドは TTL による削除タイミングの遅延を補うための二重チェック用に保持する。
     """
     container = _get_tokens_container()
+    tid = _token_id(token)
     container.upsert_item({
-        "id": token,
+        "id": tid,
         "email": email,
         "expires_at": time.time() + TOKEN_TTL_SECONDS,
     })
@@ -260,7 +269,8 @@ def get_token_email(token: str) -> str | None:
     """
     try:
         container = _get_tokens_container()
-        item = container.read_item(item=token, partition_key=token)
+        tid = _token_id(token)
+        item = container.read_item(item=tid, partition_key=tid)
         if item.get("expires_at", 0) < time.time():
             return None
         return item.get("email")
@@ -272,7 +282,8 @@ def delete_token(token: str) -> None:
     """トークンを削除する（ログアウト時）。"""
     try:
         container = _get_tokens_container()
-        container.delete_item(item=token, partition_key=token)
+        tid = _token_id(token)
+        container.delete_item(item=tid, partition_key=tid)
     except Exception:
         pass
 

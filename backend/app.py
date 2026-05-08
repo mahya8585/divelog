@@ -24,7 +24,9 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from itsdangerous import BadSignature, URLSafeSerializer
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -64,6 +66,14 @@ except ImportError:
 
 app = Flask(__name__)
 
+# レートリミッター（ブルートフォース対策）
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
 # アップロードサイズ上限 (5 MB)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
 
@@ -81,7 +91,8 @@ if not _SECRET_KEY:
     )
 _AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
 _AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
-_signer = URLSafeSerializer(_SECRET_KEY)
+_TOKEN_MAX_AGE = 10 * 60  # 10 分
+_signer = URLSafeTimedSerializer(_SECRET_KEY)
 
 # Cosmos DB が設定されている場合: 初回起動時に AUTH_EMAIL/AUTH_PASSWORD からユーザーを作成
 with app.app_context():
@@ -102,11 +113,13 @@ def _generate_token_signed(email: str) -> str:
 
 
 def _verify_token_signed(token: str) -> bool:
-    """itsdangerous 署名トークンを検証する（フォールバック用）。"""
+    """itsdangerous 署名トークンを検証する（フォールバック用）。
+    max_age で有効期限を強制する。
+    """
     try:
-        data = _signer.loads(token)
+        data = _signer.loads(token, max_age=_TOKEN_MAX_AGE)
         return bool(_AUTH_EMAIL) and data.get("email") == _AUTH_EMAIL
-    except (BadSignature, Exception):
+    except (BadSignature, SignatureExpired, Exception):
         return False
 
 
@@ -154,6 +167,7 @@ def health():
 # ── 認証エンドポイント ────────────────────────────────────
 
 @app.route("/api/login", methods=["POST"])
+@limiter.limit("5 per minute")
 def login():
     """メールアドレスとパスワードで認証し、トークンを返す。"""
     data = request.get_json(silent=True) or {}

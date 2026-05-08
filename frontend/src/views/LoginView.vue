@@ -76,7 +76,7 @@ async function doLogin() {
   try {
     await login(email.value, password.value)
     const redirect = route.query.redirect
-    router.push(typeof redirect === 'string' && redirect.startsWith('/') ? redirect : '/')
+    router.push(typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/')
   } catch (e) {
     errorMsg.value = e.message || 'ログインに失敗しました'
   } finally {
