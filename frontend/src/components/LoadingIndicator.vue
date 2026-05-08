@@ -31,6 +31,9 @@ defineProps({
 
 <style scoped>
 .loading-indicator {
+  --indicator-mid: var(--ocean-mid, #1a5f8a);
+  --indicator-teal: var(--ocean-teal, #00b4d8);
+  --antenna-stroke-width: 3.2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -54,20 +57,20 @@ defineProps({
 }
 
 .body-shape {
-  fill: var(--ocean-mid);
+  fill: var(--indicator-mid);
 }
 
 .body-stripe,
 .antenna {
-  stroke: var(--ocean-teal);
-  stroke-width: 3.2;
+  stroke: var(--indicator-teal);
+  stroke-width: var(--antenna-stroke-width);
   stroke-linecap: round;
   fill: none;
 }
 
 .loading-text {
   margin: 0;
-  color: var(--ocean-mid);
+  color: var(--indicator-mid);
   font-weight: 600;
   letter-spacing: 0.03em;
 }
