@@ -15,14 +15,20 @@ Docker ビルド（プロジェクトルートから）:
 
 import os
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 # backend/ ディレクトリを import パスに追加
 sys.path.insert(0, str(Path(__file__).parent))
+# プロジェクトルートを import パスに追加 (workflow モジュールのため)
+_project_root = str(Path(__file__).parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # .env ファイルが存在すれば読み込む
 try:
@@ -31,14 +37,26 @@ try:
 except ImportError:
     pass
 
-from data import extract_tags, load_all_dives, load_dive, search_dives
+from data import extract_tags, load_all_dives, load_dive, save_dive, search_dives
+
+try:
+    from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu
+except ImportError:
+    _convert_zxu = None
 
 app = Flask(__name__)
 
+# アップロードサイズ上限 (5 MB)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
 # CORS: フロントエンドの URL を許可
 # 本番では ALLOWED_ORIGINS に Azure Static Web Apps の URL を設定する
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-CORS(app, origins=allowed_origins)
+_default_origins = "http://localhost:5173" if os.environ.get("FLASK_DEBUG", "").lower() == "true" else ""
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", _default_origins)
+if allowed_origins:
+    CORS(app, origins=allowed_origins.split(","))
+else:
+    CORS(app)
 
 
 # ── ヘルスチェック ────────────────────────────────────────
@@ -117,6 +135,42 @@ def get_dive(dive_id: str):
 
     tags = extract_tags(dive.get("memo") or "")
     return jsonify({"dive": dive, "tags": tags})
+
+
+@app.route("/api/dives/upload", methods=["POST"])
+def upload_dive():
+    """ZXU ファイルをアップロードしてダイブデータを登録する。"""
+    if "file" not in request.files:
+        return jsonify({"error": "ファイルが見つかりません"}), 400
+
+    uploaded_file = request.files["file"]
+    if not uploaded_file.filename:
+        return jsonify({"error": "ファイル名が空です"}), 400
+
+    filename = secure_filename(uploaded_file.filename)
+    if not filename.lower().endswith(".zxu"):
+        return jsonify({"error": "ZXU ファイルのみ対応しています"}), 400
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
+            tmp_path = tmp.name
+            uploaded_file.save(tmp_path)
+
+        if _convert_zxu is None:
+            app.logger.error("workflow.convert_zxu_to_json が読み込めません")
+            return jsonify({"error": "サーバー設定エラーが発生しました"}), 500
+
+        dive_data = _convert_zxu(Path(tmp_path))
+        dive_id = save_dive(dive_data)
+        return jsonify({"dive_id": dive_id, "message": "登録が完了しました"}), 201
+
+    except Exception:
+        app.logger.exception("ZXU アップロード処理でエラーが発生しました")
+        return jsonify({"error": "登録に失敗しました。ファイルを確認してください。"}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 if __name__ == "__main__":

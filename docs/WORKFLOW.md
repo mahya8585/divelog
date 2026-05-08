@@ -4,6 +4,14 @@
 
 ダイブコンピュータ（AQUALUNG i300C）から出力された `.zxu` ファイルを解析・クレンジングし、後続処理（Web 表示・DB 登録）で扱いやすい JSON 形式に変換するパイプラインです。
 
+### 変換方法
+
+| 方法 | 説明 |
+|---|---|
+| CLI（一括変換） | `python workflow/convert_zxu_to_json.py` で `workflow/zxu/` 以下を一括変換 |
+| Web UI（個別登録） | `/upload` ページから `.zxu` ファイルをアップロードし、変換と DB 登録を同時に実行 |
+| API（個別登録） | `POST /api/dives/upload` にファイルを送信（[API リファレンス](api.md) 参照） |
+
 ---
 
 ## ディレクトリ構成

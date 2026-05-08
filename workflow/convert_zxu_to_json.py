@@ -10,8 +10,14 @@ ZXU → JSON 変換スクリプト
 
 import re
 import json
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+try:
+    from defusedxml.ElementTree import fromstring as _safe_fromstring
+except ImportError:
+    # フォールバック: defusedxml 未インストール時は標準ライブラリを使用
+    import xml.etree.ElementTree as ET
+    _safe_fromstring = ET.fromstring
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +110,7 @@ def _extract_numeric(s: str) -> float | None:
 def _parse_zar(zar_text: str) -> dict:
     """ZAR ブロック内の XML を解析して辞書を返す。"""
 
-    root = ET.fromstring(zar_text)
+    root = _safe_fromstring(zar_text)
 
     def get(tag: str) -> str | None:
         el = root.find(tag)

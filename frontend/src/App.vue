@@ -1,9 +1,12 @@
 <template>
   <div class="d-flex flex-column min-vh-100">
     <nav class="navbar navbar-dark bg-ocean py-2">
-      <div class="container">
+      <div class="container d-flex align-items-center justify-content-between">
         <router-link class="navbar-brand fw-bold" to="/">
           <i class="bi bi-water me-2"></i>Dive Log
+        </router-link>
+        <router-link class="btn btn-outline-light btn-sm" to="/upload">
+          <i class="bi bi-cloud-upload me-1"></i>登録
         </router-link>
       </div>
     </nav>

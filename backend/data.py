@@ -73,6 +73,32 @@ def _load_one_from_cosmos(dive_id: str) -> dict:
     return container.read_item(item=dive_id, partition_key=dive_id)
 
 
+# ── JSON ファイルへ書き込む ────────────────────────────────
+
+def _validate_dive_id(dive_id: str) -> None:
+    """dive_id がファイル名として安全かバリデーションする。"""
+    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]+", dive_id):
+        raise ValueError(f"不正な dive_id: {dive_id}")
+
+
+def _save_to_json(dive_data: dict) -> None:
+    dive_id = dive_data["dive_id"]
+    _validate_dive_id(dive_id)
+    JSON_DIR.mkdir(parents=True, exist_ok=True)
+    path = JSON_DIR / f"{dive_id}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(dive_data, f, ensure_ascii=False, indent=2)
+
+
+# ── Cosmos DB へ書き込む ──────────────────────────────────
+
+def _save_to_cosmos(dive_data: dict) -> None:
+    container = _get_container()
+    doc = dict(dive_data)
+    doc["id"] = doc["dive_id"]
+    container.upsert_item(doc)
+
+
 # ── 公開 API ──────────────────────────────────────────────
 
 def load_all_dives() -> list[dict]:
@@ -94,6 +120,18 @@ def extract_tags(memo: str) -> list[str]:
     if not memo:
         return []
     return re.findall(r"#(\S+)", memo)
+
+
+def save_dive(dive_data: dict) -> str:
+    """ダイブデータを保存し、dive_id を返す。"""
+    dive_id = dive_data.get("dive_id")
+    if not dive_id:
+        raise ValueError("dive_id が必要です")
+    if _use_cosmos():
+        _save_to_cosmos(dive_data)
+    else:
+        _save_to_json(dive_data)
+    return dive_id
 
 
 def search_dives(

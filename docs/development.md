@@ -76,7 +76,7 @@ docker build -f backend/Dockerfile -t divelog-backend .
 docker run -p 8000:8000 --env-file .env divelog-backend
 ```
 
-> `workflow/json/` はコンテナイメージに含まれません。  
+> `workflow/json/` はコンテナイメージに含まれません（ただし `workflow/convert_zxu_to_json.py` はアップロード機能のためにイメージ内にコピーされます）。  
 > 本番では Cosmos DB を使用するか、`JSON_DIR` 環境変数でマウントしたボリュームを指定してください。
 
 ---
@@ -117,3 +117,29 @@ python import_cosmos.py
 > **Note**: Azure サブスクリプションのポリシーで `disableLocalAuth` が強制されている場合、キーベース認証が無効化されるため、ローカル環境からのインポートには `az cosmosdb update --disable-key-based-metadata-write-access false` などの対応が必要になる場合があります。
 
 `.zxu` → JSON 変換については [workflow 仕様](WORKFLOW.md) を参照してください。
+
+---
+
+## ダイブログのアップロード登録
+
+Web UI からダイブコンピュータの `.zxu` ファイルをアップロードしてダイブログを登録できます。
+
+1. ナビバーの「登録」ボタンをクリックして `/upload` ページへ移動
+2. `.zxu` ファイルを選択（ドラッグ＆ドロップも可能）
+3. 「登録する」ボタンをクリック
+4. 登録完了後、ダイブ詳細ページへのリンクが表示される
+
+### API での直接登録
+
+```bash
+curl -X POST http://localhost:8000/api/dives/upload \
+  -F "file=@path/to/dive.zxu"
+```
+
+成功時のレスポンス:
+
+```json
+{ "dive_id": "7072_49450_20251220100700_1", "message": "登録が完了しました" }
+```
+
+詳細は [API リファレンス](api.md) を参照してください。

@@ -154,3 +154,58 @@
 ```json
 { "error": "指定された dive_id が見つかりません" }
 ```
+
+---
+
+## `POST /api/dives/upload`
+
+ZXU ファイル（ダイブコンピュータ出力ファイル）をアップロードして、ダイブログデータを登録する。
+
+ファイルは自動的に JSON に変換され、Cosmos DB（または JSON フォールバック）に保存されます。
+
+### リクエスト
+
+- **Content-Type**: `multipart/form-data`
+- **ボディ**: `file` フィールドに `.zxu` ファイルを指定
+
+```http
+POST /api/dives/upload
+Content-Type: multipart/form-data
+
+file=<dive.zxu>
+```
+
+### レスポンス（成功: 201 Created）
+
+```json
+{
+  "dive_id": "7072_49450_20251220100700_1",
+  "message": "登録が完了しました"
+}
+```
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `dive_id` | string | 登録されたダイブの固有 ID |
+| `message` | string | 完了メッセージ |
+
+### エラーレスポンス
+
+| ステータス | 説明 |
+|---|---|
+| `400 Bad Request` | ファイルが添付されていない、ファイル名が空、または `.zxu` 以外のファイル |
+| `500 Internal Server Error` | 変換処理または保存処理で内部エラーが発生 |
+
+```json
+{ "error": "ZXU ファイルのみ対応しています" }
+```
+
+### 処理フロー
+
+1. アップロードされたファイルの拡張子を検証（`.zxu` のみ許可）
+2. 一時ファイルに保存
+3. `workflow/convert_zxu_to_json.py` で JSON に変換
+4. `data.save_dive()` で Cosmos DB（または JSON ファイル）に保存
+5. 一時ファイルを削除
+
+> **セキュリティ**: エラー発生時のレスポンスにはスタックトレースを含めず、サニタイズされたメッセージのみ返します。詳細はサーバーログに記録されます。

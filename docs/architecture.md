@@ -64,7 +64,8 @@ divelog/
 │   │   ├── api/dives.js        # API クライアント
 │   │   └── views/
 │   │       ├── HomeView.vue    # ダイブ一覧・ヒートマップ・検索
-│   │       └── DetailView.vue  # ダイブ詳細・水深グラフ・地図
+│   │       ├── DetailView.vue  # ダイブ詳細・水深グラフ・地図
+│   │       └── UploadView.vue  # ZXU ファイルアップロード・ダイブログ登録
 │   ├── index.html              # CDN (Bootstrap, Leaflet, Chart.js)
 │   ├── vite.config.js          # Vite 設定・開発プロキシ
 │   ├── staticwebapp.config.json # SPA ルーティングフォールバック設定
@@ -81,10 +82,11 @@ divelog/
 │       ├── cosmosDb.bicep            # Cosmos DB Serverless
 │       └── keyVault.bicep            # Key Vault
 │
-├── workflow/                   # データ管理ユーティリティ（デプロイ対象外）
+├── workflow/                   # データ管理ユーティリティ
+│   ├── convert_zxu_to_json.py # ZXU → JSON 変換（CLI + バックエンドから呼び出し）
+│   ├── import_cosmos.py        # Cosmos DB インポートスクリプト
 │   ├── json/                   # ローカル JSON ダイブログデータ
-│   ├── zxu/                    # ダイコン出力ファイル (入力)
-│   └── import_cosmos.py        # Cosmos DB インポートスクリプト
+│   └── zxu/                    # ダイコン出力ファイル (入力)
 │
 ├── docs/                       # ドキュメント
 ├── azure.yaml                  # Azure Developer CLI (azd) 設定
@@ -127,6 +129,7 @@ npm でインストールしているライブラリ:
 
 - **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ）
 - **入力バリデーション**: `dive_id` パスパラメータは `replace("_","").isalnum()` でアルファベット・数字・アンダースコアのみ許可（パストラバーサル対策）
+- **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。一時ファイルは処理完了後に削除。エラー時のレスポンスにスタックトレースを含めない
 - **XSS 対策**: DetailView のメモ表示は HTML エスケープ後に `#tag` 変換を実行
 
 ### シークレット管理
