@@ -7,7 +7,7 @@
 
     <!-- ローディング -->
     <div v-if="loading" class="text-center py-5">
-      <div class="spinner-border text-primary" role="status"></div>
+      <LoadingIndicator />
     </div>
 
     <!-- 404 -->
@@ -150,6 +150,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend, Filler } from 'chart.js'
 import { fetchDive } from '../api/dives.js'
+import LoadingIndicator from '../components/LoadingIndicator.vue'
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend, Filler)
 
