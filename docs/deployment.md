@@ -41,7 +41,9 @@ azd up
 | `backendUrl` | Container Apps の URL |
 | `frontendUrl` | Static Web Apps の URL |
 | `cosmosEndpoint` | Cosmos DB エンドポイント |
-| `keyVaultUri` | Key Vault URI |
+| `functionAppName` | Functions の名前 |
+
+> SWA の `deploymentToken` は **outputs から削除済み** です（`listSecrets` の値を出力に含めないため）。GitHub Actions 用には別途 `az staticwebapp secrets list` で取得してください。
 
 ---
 
@@ -163,32 +165,51 @@ az ad app federated-credential create --id <appId> --parameters '{
 
 ---
 
-## 5.5. 認証シークレットの設定
+## 5.5. 初回ユーザーのシード（手動実行）
 
-初回デプロイ時に Container App へ認証用シークレットを設定します。これにより起動時に Cosmos DB にユーザーがシードされます。
+セキュリティ強化のため、認証用パスワードを Container App の環境変数 / secrets に常駐させない設計に変更しました。初回ユーザーは [`scripts/seed_user.py`](../scripts/seed_user.py) で 1 回だけ作成します。
+
+### 前提
+
+- 実行ユーザーが Cosmos DB の `Cosmos DB Built-in Data Contributor` ロールを保有していること
+- Cosmos DB は `publicNetworkAccess: Disabled` のため、**VNet 内（Container App の exec / Cloud Shell + 同一 VNet 等）から実行する必要があります**
+
+### 手順
 
 ```bash
-# シークレットを設定
-az containerapp secret set \
-  -g rg-divelogsite -n ca-divelog \
-  --secrets "auth-email=<your-email>" \
-            "auth-password=<your-password>" \
-            "secret-key=$(openssl rand -base64 36)"
+# 1) 自分にデータプレーン RBAC を付与
+MY_OID=$(az ad signed-in-user show --query id -o tsv)
+az cosmosdb sql role assignment create \
+  --account-name cosmos-divelog -g rg-divelogsite \
+  --role-definition-id 00000000-0000-0000-0000-000000000002 \
+  --principal-id $MY_OID \
+  --scope "/"
 
-# 環境変数をシークレット参照として追加
-az containerapp update \
-  -g rg-divelogsite -n ca-divelog \
-  --set-env-vars "AUTH_EMAIL=secretref:auth-email" \
-                 "AUTH_PASSWORD=secretref:auth-password" \
-                 "SECRET_KEY=secretref:secret-key"
+# 2) Container App の exec から実行（VNet 内のため Cosmos DB に到達可能）
+az containerapp exec -g rg-divelogsite -n ca-divelog --command "/bin/sh"
+
+# コンテナ内で:
+export COSMOS_ENDPOINT=https://cosmos-divelog.documents.azure.com:443/
+python /app/scripts/seed_user.py --email admin@example.com --password 'S3cure!Passw0rd'
 ```
 
-> **Note**: Bicep デプロイ時に `secretKey` / `authEmail` / `authPassword` パラメータを指定すれば自動で設定されます。
-> 上記 CLI 手順はパラメータを省略してデプロイした場合の後付け設定用です。
-
-シークレットが設定されると新リビジョンが作成され、起動時に `seed_user_if_needed()` が実行されて Cosmos DB の `users` コンテナにユーザーが作成されます。
+> **Note**: `--password` は履歴 / プロセスリストに残ります。実行後は `history -c` 等で履歴を消去してください。
 
 ---
+
+## 6. Functions のデプロイ
+
+`azure.yaml` に `functions` サービスを追加済みのため `azd up` / `azd deploy functions` で一括デプロイされます。
+
+```bash
+azd deploy functions
+```
+
+環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。
+
+---
+
+## パラメータ
 
 `infra/main.bicepparam` で変更可能なパラメータ:
 
@@ -197,21 +218,21 @@ az containerapp update \
 | `appName` | `divelog` | リソース名のプレフィックス |
 | `location` | リソースグループのリージョン | デプロイリージョン |
 | `backendImage` | プレースホルダーイメージ | バックエンドコンテナイメージ |
+| `backendMinReplicas` | `1` | Container Apps 最小レプリカ数（`@minValue(1)`） |
 | `backendMaxReplicas` | `3` | Container Apps 最大レプリカ数 |
 | `staticWebAppLocation` | `eastasia` | Static Web Apps のリージョン |
-| `secretKey` | (空) | 認証トークン署名用シークレットキー（`@secure()`） |
-| `authEmail` | (空) | 初回セットアップ用の管理者メールアドレス（`@secure()`） |
-| `authPassword` | (空) | 初回セットアップ用の管理者パスワード（`@secure()`） |
+
+> 旧 `secretKey` / `authEmail` / `authPassword` パラメータは廃止しました（`scripts/seed_user.py` での手動シードに移行）。
 
 ---
 
-## ゼロスケールについて
+## レプリカ運用について
 
-Container Apps は `minReplicas: 0` に設定されています。
+Container Apps は `minReplicas: 1` に変更されています（コールドスタート抑制 + レート制限の整合性）。
 
-- **スケールダウン**: HTTP トラフィックが停止してから概ね **5〜15 分** でコンテナが停止
-- **スケールアップ**: 次のリクエスト到着時に自動起動（**コールドスタート: 約 10〜30 秒**）
-- **スケールルール**: `concurrentRequests: 10` を超えるとレプリカを追加
+- **常時稼働**: 1 レプリカが常時待機
+- **スケールアウト**: `concurrentRequests: 10` 超で最大 `backendMaxReplicas` までレプリカ追加
+- **マルチレプリカ時のレート制限**: 複数レプリカを使用する場合は `RATELIMIT_STORAGE_URI` に Azure Cache for Redis 等を指定して状態を共有してください（未設定時は in-memory のためレプリカ毎にカウント）
 
 ---
 
@@ -256,13 +277,32 @@ az containerapp show \
 
 以下を確認してください:
 
-1. Container App に `AUTH_EMAIL` / `AUTH_PASSWORD` / `SECRET_KEY` が設定されているか:
-   ```bash
-   az containerapp show -n ca-divelog -g rg-divelogsite \
-     --query "properties.template.containers[0].env[].name" -o json
-   ```
-2. Cosmos DB `users` コンテナにユーザーが存在するか（シードが実行されたか）
-3. Container App のログを確認:
+1. Cosmos DB `users` コンテナにユーザーが存在するか（[`scripts/seed_user.py`](../scripts/seed_user.py) を実行済みか）
+2. Container App のログを確認:
    ```bash
    az containerapp logs show -g rg-divelogsite -n ca-divelog --type console --tail 30
    ```
+3. レート制限に到達していないか確認（`429 Too Many Requests` の場合は `5/分` 上限超過）
+
+### CORS エラーが出る
+
+Container App の `ALLOWED_ORIGINS` 環境変数が空の場合は **フェイルクローズ** で CORS が一切許可されません（ログに警告出力）。Bicep デプロイ時は SWA の URL が自動で設定されますが、後付けで変更した場合は以下で確認:
+
+```bash
+az containerapp show -n ca-divelog -g rg-divelogsite \
+  --query "properties.template.containers[0].env[?name=='ALLOWED_ORIGINS']"
+```
+
+### Functions が Cosmos Change Feed を受信しない
+
+1. Function App の MI に Cosmos データプレーン RBAC が付与されているか確認:
+   ```bash
+   az cosmosdb sql role assignment list \
+     --account-name cosmos-divelog -g rg-divelogsite -o table
+   ```
+2. `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential` / `__clientId` が設定されているか確認:
+   ```bash
+   az functionapp config appsettings list -n func-divelog -g rg-divelogsite \
+     --query "[?starts_with(name, 'COSMOS_TRIGGER_CONNECTION')]" -o table
+   ```
+3. リース用コンテナ `zxu_uploads_leases` が存在するか確認

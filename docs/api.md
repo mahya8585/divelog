@@ -11,7 +11,19 @@
 
 リクエストヘッダーに `Authorization: Bearer <token>` を含めてください。トークンは `/api/login` で取得できます。
 
-> **Note**: `AUTH_EMAIL` が未設定かつ Cosmos DB も未設定の場合（ローカル開発時）、認証はスキップされます。
+> **Note**: `AUTH_DISABLED=true` を明示的に設定した場合のみ認証をスキップします（ローカル開発限定）。未設定時は常に認証必須です。
+
+## レート制限
+
+`flask-limiter` により以下の制限を適用しています。超過時は `429 Too Many Requests` を返します。
+
+| エンドポイント | 制限 |
+|---|---|
+| `/api/login` | 5 回 / 分 |
+| `/api/dives/upload` | 10 回 / 分 |
+| `/api/dives` | 60 回 / 分 |
+| その他 | 200 回 / 分（デフォルト） |
+| `/health` | 制限なし |
 
 ---
 
@@ -273,11 +285,15 @@ file=<dive.zxu>
 | ステータス | 説明 |
 |---|---|
 | `400 Bad Request` | ファイルが添付されていない、ファイル名が空、または `.zxu` 以外のファイル |
+| `413 Payload Too Large` | ファイルサイズが 2 MB を超過 |
+| `429 Too Many Requests` | レート制限超過（10 回/分） |
 | `500 Internal Server Error` | 変換処理または保存処理で内部エラーが発生 |
 
 ```json
 { "error": "ZXU ファイルのみ対応しています" }
 ```
+
+> **サイズ上限**: サーバー側の `MAX_CONTENT_LENGTH = 2 MB`（Cosmos DB ドキュメントサイズ上限を考慮）。
 
 ### 処理フロー
 

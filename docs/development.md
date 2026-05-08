@@ -89,7 +89,10 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 |---|---|---|
 | `PORT` | `8000` | リッスンポート |
 | `FLASK_DEBUG` | `false` | デバッグモード (`true` / `false`) |
-| `ALLOWED_ORIGINS` | `*` | CORS 許可オリジン（カンマ区切り複数可） |
+| `ALLOWED_ORIGINS` | (空) | CORS 許可オリジン（カンマ区切り）。**未設定時は CORS 一切不許可（フェイルクローズ）** |
+| `TRUST_PROXY_HOPS` | `1` | `ProxyFix` で信頼するプロキシのホップ数（Container Apps 経由なら `1`） |
+| `RATELIMIT_STORAGE_URI` | `memory://` | レート制限のストレージ。マルチレプリカでは `redis://...` 推奨 |
+| `AUTH_DISABLED` | (空) | `true` を明示設定した場合のみ認証をスキップ（ローカル開発限定） |
 | `COSMOS_ENDPOINT` | — | Cosmos DB エンドポイント URL |
 | `COSMOS_KEY` | — | Cosmos DB 主キー（ローカル開発用。本番は Entra ID RBAC 認証を使用） |
 | `COSMOS_DATABASE` | `divelog` | Cosmos DB データベース名 |
@@ -98,9 +101,12 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `COSMOS_USERS_CONTAINER` | `users` | ユーザー認証情報コンテナ名 |
 | `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
 | `JSON_DIR` | `workflow/json/` | JSON フォールバックディレクトリパス |
-| `AUTH_EMAIL` | — | 管理者メールアドレス（Cosmos DB 設定時は初回シード用、未設定時はフォールバック認証用） |
-| `AUTH_PASSWORD` | — | 管理者パスワード（同上） |
-| `SECRET_KEY` | ランダム生成 | トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用。本番では固定値を設定推奨） |
+| `AZURE_CLIENT_ID` | — | ユーザー割り当てマネージド ID のクライアント ID（Azure 上のみ） |
+| `AUTH_EMAIL` | — | （ローカルフォールバック専用）管理者メール。Cosmos DB 利用時は使用しない |
+| `AUTH_PASSWORD` | — | （ローカルフォールバック専用）管理者パスワード。Cosmos DB 利用時は使用しない |
+| `SECRET_KEY` | ランダム生成 | トークン署名用シークレットキー（ローカルフォールバック用） |
+
+> **本番でのユーザー管理**: Cosmos DB を使う本番環境では `AUTH_EMAIL` / `AUTH_PASSWORD` 環境変数を **設定しません**。代わりに [`scripts/seed_user.py`](../scripts/seed_user.py) で `users` コンテナへ直接シードします。
 
 ### バックエンド Python 依存パッケージ
 
@@ -108,13 +114,13 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 |---|---|
 | `flask` | Web フレームワーク |
 | `flask-cors` | CORS 制御 |
-| `flask-limiter` | レート制限（ログイン: 5回/分） |
-| `gunicorn` | 本番用 WSGI サーバー |
+| `flask-limiter` | レート制限（login 5/min, upload 10/min, dives 60/min, default 200/min） |
+| `gunicorn` | 本番用 WSGI サーバー（`--forwarded-allow-ips "*"`） |
+| `werkzeug` | パスワードハッシュ (PBKDF2) + `ProxyFix` ミドルウェア |
 | `azure-cosmos` | Cosmos DB SDK |
 | `azure-identity` | Entra ID 認証 (DefaultAzureCredential) |
 | `itsdangerous` | トークン署名（ローカル開発フォールバック） |
-| `werkzeug` | パスワードハッシュ (PBKDF2) |
-| `defusedxml` | XXE 対策付き XML パーサー |
+| `defusedxml` | XXE 対策付き XML パーサー（**必須**） |
 
 ### フロントエンド (`frontend/.env.example`)
 
@@ -173,12 +179,20 @@ curl -X POST http://localhost:8000/api/dives/upload \
 
 `functions/zxu_change_feed_processor.py` は `zxu_uploads` コンテナの Change Feed を監視し、`workflow/convert_zxu_to_json.py` を使って `dives` コンテナへ変換結果を書き込みます。
 
+Azure 上では Flex Consumption (FC1, Python 3.11) で動作し、**マネージド ID 経由で Cosmos に接続**します（接続文字列なし）。
+
 主な環境変数:
 
-- `COSMOS_ENDPOINT`
-- `COSMOS_KEY`（ローカル開発時のみ任意）
-- `COSMOS_DATABASE`（既定: `divelog`）
-- `COSMOS_CONTAINER`（既定: `dives`）
-- `COSMOS_ZXU_CONTAINER`（既定: `zxu_uploads`）
-- `COSMOS_ZXU_LEASES_CONTAINER`（例: `zxu_uploads_leases`）
-- `COSMOS_TRIGGER_CONNECTION`（Cosmos DB Trigger 接続設定名）
+| 変数 | 用途 |
+|---|---|
+| `COSMOS_ENDPOINT` | Cosmos DB エンドポイント |
+| `COSMOS_DATABASE` | 既定: `divelog` |
+| `COSMOS_CONTAINER` | 既定: `dives` |
+| `COSMOS_ZXU_CONTAINER` | 既定: `zxu_uploads` |
+| `COSMOS_ZXU_LEASES_CONTAINER` | 既定: `zxu_uploads_leases` |
+| `COSMOS_TRIGGER_CONNECTION__accountEndpoint` | Cosmos トリガー用エンドポイント（MI 接続） |
+| `COSMOS_TRIGGER_CONNECTION__credential` | `managedidentity` 固定 |
+| `COSMOS_TRIGGER_CONNECTION__clientId` | ユーザー割り当て MI のクライアント ID |
+| `AzureWebJobsStorage__accountName` / `__credential` / `__clientId` | ランタイム用 Storage の MI 接続 |
+
+> Function App は Storage の Shared Key を使用しません（`allowSharedKeyAccess: false`）。
