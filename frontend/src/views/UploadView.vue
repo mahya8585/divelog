@@ -100,6 +100,12 @@ function selectFile(file) {
     selectedFile.value = null
     return
   }
+  const MAX_SIZE = 5 * 1024 * 1024 // 5 MB
+  if (file.size === 0 || file.size > MAX_SIZE) {
+    errorMsg.value = 'ファイルサイズは 1 バイト～5 MB の範囲で選択してください。'
+    selectedFile.value = null
+    return
+  }
   selectedFile.value = file
 }
 

@@ -46,10 +46,17 @@ except ImportError:
 
 app = Flask(__name__)
 
+# アップロードサイズ上限 (5 MB)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
 # CORS: フロントエンドの URL を許可
 # 本番では ALLOWED_ORIGINS に Azure Static Web Apps の URL を設定する
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-CORS(app, origins=allowed_origins)
+_default_origins = "http://localhost:5173" if os.environ.get("FLASK_DEBUG", "").lower() == "true" else ""
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", _default_origins)
+if allowed_origins:
+    CORS(app, origins=allowed_origins.split(","))
+else:
+    CORS(app)
 
 
 # ── ヘルスチェック ────────────────────────────────────────

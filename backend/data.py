@@ -75,8 +75,15 @@ def _load_one_from_cosmos(dive_id: str) -> dict:
 
 # ── JSON ファイルへ書き込む ────────────────────────────────
 
+def _validate_dive_id(dive_id: str) -> None:
+    """dive_id がファイル名として安全かバリデーションする。"""
+    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]+", dive_id):
+        raise ValueError(f"不正な dive_id: {dive_id}")
+
+
 def _save_to_json(dive_data: dict) -> None:
     dive_id = dive_data["dive_id"]
+    _validate_dive_id(dive_id)
     JSON_DIR.mkdir(parents=True, exist_ok=True)
     path = JSON_DIR / f"{dive_id}.json"
     with open(path, "w", encoding="utf-8") as f:
