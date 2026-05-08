@@ -54,6 +54,7 @@ from data import (
     load_all_dives,
     load_dive,
     save_dive,
+    save_zxu_upload,
     save_token,
     search_dives,
     seed_user_if_needed,
@@ -288,6 +289,20 @@ def upload_dive():
 
     tmp_path = None
     try:
+        if _use_cosmos():
+            raw = uploaded_file.read()
+            if not raw:
+                return jsonify({"error": "ファイルが空です"}), 400
+            try:
+                zxu_text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return jsonify({"error": "ZXU ファイルの文字コードが不正です"}), 400
+            upload_id = save_zxu_upload(zxu_text, filename)
+            return jsonify({
+                "upload_id": upload_id,
+                "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。",
+            }), 202
+
         with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
             tmp_path = tmp.name
             uploaded_file.save(tmp_path)

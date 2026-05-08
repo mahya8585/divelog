@@ -9,8 +9,8 @@
 | 方法 | 説明 |
 |---|---|
 | CLI（一括変換） | `python workflow/convert_zxu_to_json.py` で `workflow/zxu/` 以下を一括変換 |
-| Web UI（個別登録） | `/upload` ページから `.zxu` ファイルをアップロードし、変換と DB 登録を同時に実行 |
-| API（個別登録） | `POST /api/dives/upload` にファイルを送信（[API リファレンス](api.md) 参照） |
+| Web UI（個別登録） | `/upload` ページから `.zxu` ファイルをアップロードし、Cosmos DB Change Feed 経由で非同期変換 |
+| API（個別登録） | `POST /api/dives/upload` にファイルを送信（Cosmos DB 利用時は `zxu_uploads` へ保存して 202 を返却） |
 
 ---
 
@@ -19,6 +19,7 @@
 ```
 workflow/
 ├── convert_zxu_to_json.py   # 変換スクリプト本体
+├── ../functions/            # Change Feed トリガー Functions
 ├── zxu/                     # 元データ置き場（入力）
 │   └── <DUID>/
 │       └── <DUID>.zxu
@@ -106,6 +107,13 @@ python workflow/convert_zxu_to_json.py
 
 - `workflow/zxu/` 以下の全 `.zxu` ファイルを再帰的に検索して変換します。
 - 出力先: `workflow/json/<DUID>.json`（既存ファイルは上書き）
+
+### Change Feed 連携（本番）
+
+1. `POST /api/dives/upload` で受け取った ZXU を `zxu_uploads` コンテナへ保存
+2. `zxu_uploads` の Change Feed をトリガーに Azure Functions が起動
+3. Functions 内で `convert_zxu_to_json()` を実行して `dives` コンテナへ upsert
+4. 元ドキュメントの `status` を `processed` / `failed` に更新
 
 ### 依存ライブラリ
 
@@ -214,5 +222,4 @@ python workflow/convert_zxu_to_json.py
 | `temp_c` | float \| 省略 | 水温（℃）（値がある場合のみ） |
 
 ---
-
 

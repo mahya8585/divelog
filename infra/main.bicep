@@ -68,6 +68,7 @@ module cosmos 'modules/cosmosDb.bicep' = {
     location     : location
     databaseName : 'divelog'
     containerName: 'dives'
+    zxuContainerName: 'zxu_uploads'
   }
 }
 
@@ -115,6 +116,7 @@ module backend 'modules/containerApp.bicep' = {
     acrId             : acr.outputs.acrId
     maxReplicas       : backendMaxReplicas
     cosmosEndpoint    : cosmos.outputs.endpoint
+    cosmosZxuContainerName: 'zxu_uploads'
     secretKey         : secretKey
     authEmail         : authEmail
     authPassword      : authPassword

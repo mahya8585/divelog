@@ -23,6 +23,9 @@ param allowedOrigins string = '*'
 @description('Cosmos DB エンドポイント')
 param cosmosEndpoint string
 
+@description('ZXU 生データアップロード用コンテナ名')
+param cosmosZxuContainerName string = 'zxu_uploads'
+
 @description('認証トークン署名用シークレットキー（Cosmos DB 未使用時のフォールバック用）')
 @secure()
 param secretKey string = ''
@@ -62,6 +65,7 @@ var baseEnv = [
   { name: 'FLASK_DEBUG',     value: 'false' }
   { name: 'ALLOWED_ORIGINS', value: allowedOrigins }
   { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+  { name: 'COSMOS_ZXU_CONTAINER', value: cosmosZxuContainerName }
   { name: 'AZURE_CLIENT_ID', value: uaMI.properties.clientId }
 ]
 var secretKeyEnv   = !empty(secretKey)    ? [{ name: 'SECRET_KEY',    secretRef: 'secret-key' }]    : []

@@ -8,6 +8,8 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from pathlib import Path
 
 # ── パス ────────────────────────────────────────────────
@@ -22,6 +24,7 @@ COSMOS_DATABASE         = os.environ.get("COSMOS_DATABASE", "divelog")
 COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
 COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
 COSMOS_TOKENS_CONTAINER = os.environ.get("COSMOS_TOKENS_CONTAINER", "tokens")
+COSMOS_ZXU_CONTAINER    = os.environ.get("COSMOS_ZXU_CONTAINER", "zxu_uploads")
 
 # トークン有効期限（秒）: 10 分
 TOKEN_TTL_SECONDS = 10 * 60
@@ -72,6 +75,16 @@ def _get_container():
     db = client.get_database_client(COSMOS_DATABASE)
     return db.create_container_if_not_exists(
         id=COSMOS_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+    )
+
+
+def _get_zxu_container():
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_ZXU_CONTAINER,
         partition_key=PartitionKey(path="/id"),
     )
 
@@ -155,6 +168,23 @@ def save_dive(dive_data: dict) -> str:
     else:
         _save_to_json(dive_data)
     return dive_id
+
+
+def save_zxu_upload(zxu_text: str, filename: str) -> str:
+    """ZXU 生データを Cosmos DB に保存し、アップロード ID を返す。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    upload_id = str(uuid4())
+    container = _get_zxu_container()
+    container.create_item({
+        "id": upload_id,
+        "upload_id": upload_id,
+        "filename": filename,
+        "zxu_text": zxu_text,
+        "status": "uploaded",
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return upload_id
 
 
 def search_dives(

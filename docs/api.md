@@ -242,7 +242,23 @@ Content-Type: multipart/form-data
 file=<dive.zxu>
 ```
 
-### レスポンス（成功: 201 Created）
+### レスポンス（成功）
+
+#### Cosmos DB 利用時: 202 Accepted（非同期変換）
+
+```json
+{
+  "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
+  "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。"
+}
+```
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `upload_id` | string | ZXU 受付データの ID（Change Feed 処理追跡用） |
+| `message` | string | 受付メッセージ |
+
+#### Cosmos DB 未利用時: 201 Created（従来の同期変換）
 
 ```json
 {
@@ -251,12 +267,6 @@ file=<dive.zxu>
   "overwritten": false
 }
 ```
-
-| フィールド | 型 | 説明 |
-|---|---|---|
-| `dive_id` | string | 登録されたダイブの固有 ID |
-| `message` | string | 完了メッセージ（上書き時は「既存のデータを上書きしました」） |
-| `overwritten` | boolean | 同一 `dive_id` のデータが既に存在し上書きした場合 `true` |
 
 ### エラーレスポンス
 
@@ -272,10 +282,9 @@ file=<dive.zxu>
 ### 処理フロー
 
 1. アップロードされたファイルの拡張子を検証（`.zxu` のみ許可）
-2. 一時ファイルに保存
-3. `workflow/convert_zxu_to_json.py` で JSON に変換
-4. `data.dive_exists()` で同一 `dive_id` の既存データを確認
-5. `data.save_dive()` で Cosmos DB（または JSON ファイル）に保存（既存データがあれば上書き）
-6. 一時ファイルを削除
+2. Cosmos DB 利用時: `zxu_uploads` コンテナへ ZXU 生データを保存して 202 を返す
+3. Cosmos DB の Change Feed をトリガーに Azure Functions が実行され、`workflow/convert_zxu_to_json.py` で JSON へ変換
+4. 変換結果を `dives` コンテナへ upsert し、`zxu_uploads` のステータスを更新
+5. Cosmos DB 未利用時のみ、従来通り API 内で同期変換して保存
 
 > **セキュリティ**: エラー発生時のレスポンスにはスタックトレースを含めず、サニタイズされたメッセージのみ返します。詳細はサーバーログに記録されます。

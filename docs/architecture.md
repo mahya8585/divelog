@@ -13,11 +13,10 @@
 │  ┌─────────────────────────────────────────────────────┐ │
 │  │ container-apps-subnet (10.0.0.0/23)                 │ │
 │  │  Flask REST API (Azure Container Apps / Consumption)│ │
+│  │  Azure Functions (Cosmos DB Change Feed Trigger)    │ │
 │  │  - VNet 統合 (workloadProfiles: Consumption)        │ │
 │  │  - ゼロスケール対応                                  │ │
-│  │  - ユーザー割り当てマネージド ID (ca-divelog-id)     │ │
-│  │    ├─ ACR へのイメージ Pull (AcrPull ロール)         │ │
-│  │    └─ Cosmos DB への RBAC アクセス (Data Contributor)│ │
+│  │  - ユーザー割り当てマネージド ID                     │ │
 │  └─────────────────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────┐ │
 │  │ private-endpoints-subnet (10.0.2.0/24)              │ │
@@ -29,9 +28,10 @@
 ┌──────────▼──────────┐
 │  Azure Cosmos DB    │
 │  (Serverless/NoSQL) │
-│  ├─ dives  コンテナ │
-│  ├─ users  コンテナ │
-│  └─ tokens コンテナ │
+│  ├─ dives        コンテナ │
+│  ├─ users        コンテナ │
+│  ├─ tokens       コンテナ │
+│  └─ zxu_uploads  コンテナ │
 │  disableLocalAuth   │
 │  publicNetworkAccess│
 │    = Disabled       │
@@ -51,6 +51,7 @@
 |---|---|---|
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
 | Azure Container Apps | Consumption (ゼロスケール, VNet 統合) | Flask API ホスティング |
+| Azure Functions | Consumption | Cosmos DB Change Feed で ZXU → JSON 変換 |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
 | Azure Cosmos DB | Serverless | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理 |
 | Azure Virtual Network | — | Container Apps + Private Endpoint のネットワーク分離 |
@@ -110,6 +111,9 @@ divelog/
 │   ├── json/                   # ローカル JSON ダイブログデータ
 │   └── zxu/                    # ダイコン出力ファイル (入力)
 │
+├── functions/                  # Azure Functions (Change Feed 変換)
+│   └── zxu_change_feed_processor.py
+│
 ├── docs/                       # ドキュメント
 ├── azure.yaml                  # Azure Developer CLI (azd) 設定
 └── README.md
@@ -162,7 +166,7 @@ npm でインストールしているライブラリ:
 - **オープンリダイレクト対策**: ログイン後のリダイレクト先は `redirect.startsWith('/') && !redirect.startsWith('//')` で検証し、外部サイトへのリダイレクトを防止
 - **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを制限（本番は Static Web Apps の URL のみ、デバッグ時は `localhost:5173` のみ、それ以外は許可なし）。`allowedHeaders` は `Authorization` と `Content-Type` のみに制限
 - **入力バリデーション**: `dive_id` パスパラメータは正規表現 `[A-Za-z0-9_\-]+` で検証（パストラバーサル対策）
-- **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。サーバー側で `MAX_CONTENT_LENGTH = 5 MB` 、フロントエンドでもファイルサイズ検証（0バイト・5 MB 超過を拒否）。一時ファイルは処理完了後に削除。エラー時のレスポンスにスタックトレースを含めない
+- **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。サーバー側で `MAX_CONTENT_LENGTH = 5 MB` 、フロントエンドでもファイルサイズ検証（0バイト・5 MB 超過を拒否）。Cosmos DB 利用時は `zxu_uploads` へ保存し、Change Feed で Azure Functions が非同期変換する。エラー時のレスポンスにスタックトレースを含めない
 - **上書き検知**: アップロード時に `dive_exists()` で同一 ID の既存データを確認。上書き時はレスポンスに `overwritten: true` を返し、フロントエンドで警告表示
 - **XXE 対策**: ZXU ファイル内の XML パースに `defusedxml` を使用（外部エンティティ展開攻撃の防止）
 - **XSS 対策**: DetailView のメモ表示は HTML エスケープ後に `#tag` 変換を実行

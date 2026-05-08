@@ -37,7 +37,7 @@ export async function fetchDives(params = {}) {
 /**
  * ZXU ファイルをアップロードしてダイブを登録する
  * @param {File} file - .zxu ファイル
- * @returns {Promise<{dive_id: string, message: string}>}
+ * @returns {Promise<{dive_id?: string, upload_id?: string, message: string}>}
  */
 export async function uploadDive(file) {
   const formData = new FormData()
