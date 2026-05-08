@@ -1,15 +1,41 @@
 <template>
   <div class="d-flex flex-column min-vh-100">
     <nav class="navbar navbar-dark bg-ocean py-2">
-      <div class="container d-flex align-items-center justify-content-between">
-        <router-link class="navbar-brand fw-bold" to="/">
+      <div class="container d-flex align-items-center">
+        <!-- ハンバーガーメニュー -->
+        <button class="btn btn-link text-white p-0 me-3 hamburger-btn" @click="menuOpen = !menuOpen" aria-label="メニュー">
+          <i class="bi bi-list fs-4"></i>
+        </button>
+        <router-link class="navbar-brand fw-bold mb-0" to="/">
           <i class="bi bi-water me-2"></i>Dive Log
-        </router-link>
-        <router-link class="btn btn-outline-light btn-sm" to="/upload">
-          <i class="bi bi-cloud-upload me-1"></i>登録
         </router-link>
       </div>
     </nav>
+
+    <!-- サイドメニュー オーバーレイ -->
+    <Transition name="fade">
+      <div v-if="menuOpen" class="menu-overlay" @click="menuOpen = false"></div>
+    </Transition>
+
+    <!-- サイドメニュー パネル -->
+    <Transition name="slide">
+      <aside v-if="menuOpen" class="side-menu">
+        <div class="side-menu-header">
+          <span class="fw-bold"><i class="bi bi-water me-1"></i>Menu</span>
+          <button class="btn btn-link text-white p-0" @click="menuOpen = false" aria-label="閉じる">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <nav class="side-menu-nav">
+          <router-link to="/" class="side-menu-item" @click="menuOpen = false">
+            <i class="bi bi-house-door me-2"></i>ダイブログ一覧
+          </router-link>
+          <router-link to="/upload" class="side-menu-item" @click="menuOpen = false">
+            <i class="bi bi-cloud-upload me-2"></i>ダイブログ登録
+          </router-link>
+        </nav>
+      </aside>
+    </Transition>
 
     <main class="flex-grow-1">
       <router-view />
@@ -20,6 +46,11 @@
     </footer>
   </div>
 </template>
+
+<script setup>
+import { ref } from 'vue'
+const menuOpen = ref(false)
+</script>
 
 <style>
 /* ── CSS 変数 ─────────────────────────────────────────── */
@@ -161,5 +192,81 @@ body {
 .btn-back:hover {
   background: var(--ocean-mid);
   color: #fff;
+}
+
+/* ── ハンバーガーメニュー ─────────────────────────────── */
+.hamburger-btn {
+  text-decoration: none !important;
+  line-height: 1;
+}
+.hamburger-btn:focus { box-shadow: none; }
+
+/* オーバーレイ */
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  z-index: 1040;
+}
+
+/* サイドパネル */
+.side-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 270px;
+  height: 100vh;
+  background: linear-gradient(180deg, var(--ocean-dark), #0f2a4a);
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, .3);
+}
+.side-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .85rem 1.1rem;
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, .12);
+}
+.side-menu-nav {
+  display: flex;
+  flex-direction: column;
+  padding: .5rem 0;
+}
+.side-menu-item {
+  display: flex;
+  align-items: center;
+  padding: .75rem 1.25rem;
+  color: rgba(255, 255, 255, .85);
+  text-decoration: none;
+  font-size: .95rem;
+  transition: background .15s, color .15s;
+}
+.side-menu-item:hover,
+.side-menu-item.router-link-exact-active {
+  background: rgba(0, 180, 216, .18);
+  color: var(--ocean-teal);
+}
+
+/* トランジション: スライド */
+.slide-enter-active,
+.slide-leave-active {
+  transition: transform .25s ease;
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(-100%);
+}
+
+/* トランジション: フェード（オーバーレイ） */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity .25s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>
