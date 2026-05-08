@@ -18,7 +18,10 @@
 │  │  - ユーザー割り当てマネージド ID + 非 root コンテナ  │ │
 │  └─────────────────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────┐ │
-│  │ Azure Functions (Flex Consumption / FC1)            │ │
+│  │ function-app-subnet (10.0.3.0/24)                   │ │
+│  │  Azure Functions (Flex Consumption / FC1)           │ │
+│  │  - Microsoft.App/environments への subnet 委任       │ │
+│  │  - VNet 統合 + vnetRouteAllEnabled = true           │ │
 │  │  - Cosmos DB Change Feed Trigger                    │ │
 │  │  - ユーザー割り当てマネージド ID                     │ │
 │  │  - Storage は Shared Key 無効 (MI 接続)              │ │
@@ -122,7 +125,9 @@ divelog/
 │   └── zxu/                    # ダイコン出力ファイル (入力)
 │
 ├── functions/                  # Azure Functions (Change Feed 変換)
-│   └── zxu_change_feed_processor.py
+│   ├── function_app.py         # Python v2 エントリポイント (固定名)
+│   ├── host.json               # extensionBundle [4.*, 5.0.0)
+│   └── requirements.txt
 │
 ├── scripts/                    # 運用スクリプト
 │   └── seed_user.py            # 初回ユーザー作成（手動実行）
@@ -190,14 +195,18 @@ npm でインストールしているライブラリ:
     - `X-Frame-Options: DENY`
     - `Referrer-Policy: no-referrer`
     - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
-    - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com`）/ タイル (`tile.openstreetmap.org`) / API (`*.azurecontainerapps.io`) のみ許可
+    - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com` = Leaflet, `cdn.jsdelivr.net` = Bootstrap CSS / Bootstrap Icons フォント）/ タイル (`tile.openstreetmap.org`) / API (`*.azurecontainerapps.io`) のみ許可
 - **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn は `--forwarded-allow-ips "*"` で ProxyFix と整合
 
 ### ネットワークセキュリティ
 
-- **VNet 統合**: Container Apps 環境は VNet の `container-apps-subnet` (10.0.0.0/23) に統合。Microsoft.App/environments への委任が必要
-- **Private Endpoint**: Cosmos DB は `private-endpoints-subnet` (10.0.2.0/24) 経由でのみアクセス可能。`publicNetworkAccess: Disabled` により公共インターネットからのアクセスを遮断
-- **Private DNS Zone**: `privatelink.documents.azure.com` を VNet にリンクし、Container Apps から Cosmos DB への名前解決をプライベートに実行
+- **VNet (10.0.0.0/16)**: 3 つのサブネットで構成
+  - `container-apps-subnet` (10.0.0.0/23) — Container Apps 環境統合 (Microsoft.App/environments 委任)
+  - `function-app-subnet` (10.0.3.0/24) — Function App VNet 統合 (Microsoft.App/environments 委任、Flex Consumption は CA と同じ委任種別)
+  - `private-endpoints-subnet` (10.0.2.0/24) — Cosmos DB Private Endpoint
+- **Functions VNet 統合**: Function App の `virtualNetworkSubnetId` + `vnetRouteAllEnabled: true` で全アウトバウンドを VNet にルーティング。これにより Cosmos DB の Private Endpoint 経由で `documents.azure.com` を解決し、`publicNetworkAccess: Disabled` 環境でも Change Feed トリガが起動する
+- **Private Endpoint**: Cosmos DB は `private-endpoints-subnet` 経由でのみアクセス可能。`publicNetworkAccess: Disabled` により公共インターネットからのアクセスを遮断
+- **Private DNS Zone**: `privatelink.documents.azure.com` を VNet にリンクし、Container Apps / Function App から Cosmos DB への名前解決をプライベートに実行
 
 ### シークレット管理
 
@@ -217,12 +226,13 @@ main ブランチへの push で自動デプロイが実行されます。Azure 
 
 | ワークフロー | トリガーパス | 処理内容 |
 |---|---|---|
-| `deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
-| `deploy-frontend.yml` | `frontend/**` | Static Web Apps デプロイ |
+| `deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 (OIDC) |
+| `deploy-frontend.yml` | `frontend/**` | Vite ビルド (`VITE_API_BASE_URL` 埋め込み) → Static Web Apps デプロイ |
+| `deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py` | Python パッケージのフラット配置 → Functions デプロイ (Oryx リモートビルド) |
 
 ### 認証方式
 
-- **バックエンド**: Entra ID アプリ登録 (`gh-divelog`) + Federated Credential で OIDC 認証
+- **バックエンド / Functions**: Entra ID アプリ登録 (`gh-divelog`) + Federated Credential で OIDC 認証
 - **フロントエンド**: SWA デプロイトークン (`SWA_DEPLOYMENT_TOKEN`)
 
 ### 必要な GitHub Secrets
@@ -233,3 +243,11 @@ main ブランチへの push で自動デプロイが実行されます。Azure 
 | `AZURE_TENANT_ID` | Azure テナント ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID |
 | `SWA_DEPLOYMENT_TOKEN` | Static Web Apps のデプロイトークン |
+| `VITE_API_BASE_URL` | フロントから呼ぶバックエンド URL（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）。Vite ビルド時にバンドルへ埋め込まれる |
+
+### Functions デプロイの注意点（Flex Consumption）
+
+- Python v2 プログラミングモデルではエントリファイル名は **`function_app.py` で固定**
+- 依存パッケージはローカル `.python_packages/` を使わず、**Oryx によるリモートビルド** (`scm-do-build-during-deployment: true` + `enable-oryx-build: true` + `remote-build: true`) で `requirements.txt` から解決する
+- `workflow/convert_zxu_to_json.py` はパッケージとして同梱せず、`function_app.py` と同じ階層に **フラット配置** する
+- Cosmos DB が `publicNetworkAccess: Disabled` のため、**Function App の VNet 統合が必須**（VNet 統合がないと Change Feed のリース取得時に 403 で失敗する）

@@ -177,9 +177,9 @@ curl -X POST http://localhost:8000/api/dives/upload \
 
 ## ZXU 変換 Functions（Change Feed）
 
-`functions/zxu_change_feed_processor.py` は `zxu_uploads` コンテナの Change Feed を監視し、`workflow/convert_zxu_to_json.py` を使って `dives` コンテナへ変換結果を書き込みます。
+`functions/function_app.py` は `zxu_uploads` コンテナの Change Feed を監視し、ルート同梱の `convert_zxu_to_json.py`（`workflow/convert_zxu_to_json.py` のフラットコピー）を使って `dives` コンテナへ変換結果を書き込みます。
 
-Azure 上では Flex Consumption (FC1, Python 3.11) で動作し、**マネージド ID 経由で Cosmos に接続**します（接続文字列なし）。
+Azure 上では Flex Consumption (FC1, Python 3.11) で動作し、**マネージド ID 経由で Cosmos に接続**します（接続文字列なし）。Cosmos が `publicNetworkAccess: Disabled` のため Function App は VNet 統合（`function-app-subnet` 10.0.3.0/24）必須です。
 
 主な環境変数:
 

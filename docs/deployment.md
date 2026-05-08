@@ -125,7 +125,8 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | ワークフロー | トリガーパス | 処理 |
 |---|---|---|
 | `.github/workflows/deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
-| `.github/workflows/deploy-frontend.yml` | `frontend/**` | Static Web Apps デプロイ |
+| `.github/workflows/deploy-frontend.yml` | `frontend/**` | Vite ビルド (`VITE_API_BASE_URL` 埋め込み) → Static Web Apps デプロイ |
+| `.github/workflows/deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py` | フラット配置でステージ → Functions デプロイ（Oryx リモートビルド） |
 
 #### 必要な GitHub Secrets
 
@@ -135,6 +136,7 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | `AZURE_TENANT_ID` | Azure テナント ID | `az account show --query tenantId` |
 | `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID | `az account show --query id` |
 | `SWA_DEPLOYMENT_TOKEN` | SWA デプロイトークン | `az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query "properties.apiKey" -o tsv` |
+| `VITE_API_BASE_URL` | フロントが呼ぶバックエンド URL（Vite ビルド時に埋め込まれる） | `az containerapp show -n ca-divelog -g rg-divelogsite --query "properties.configuration.ingress.fqdn" -o tsv`を `https://` 付きで設定 |
 
 #### OIDC 認証のセットアップ
 
@@ -199,10 +201,37 @@ python /app/scripts/seed_user.py --email admin@example.com --password 'S3cure!Pa
 
 ## 6. Functions のデプロイ
 
-`azure.yaml` に `functions` サービスを追加済みのため `azd up` / `azd deploy functions` で一括デプロイされます。
+### 6.1 前提条件
+
+- **VNet 統合必須**: Cosmos DB が `publicNetworkAccess: Disabled` のため、Function App は `function-app-subnet` (10.0.3.0/24) に VNet 統合されている必要があります（`infra/modules/functionApp.bicep` で自動設定済み）
+- **Python エントリポイント名は固定**: Python v2 プログラミングモデルでは `function_app.py` である必要があります
+- **フラットレイアウト**: `workflow/convert_zxu_to_json.py` は Functions パッケージルートに同梱します（`workflow/` サブディレクトリを作らない）
+
+### 6.2 GitHub Actions での自動デプロイ（推奨）
+
+`.github/workflows/deploy-functions.yml` で Oryx リモートビルドを使用しています。`functions/**` または `workflow/convert_zxu_to_json.py` に変更が入ると自動デプロイされます。
+
+### 6.3 手動デプロイ（例: `az functionapp deployment source config-zip`）
+
+Flex Consumption はローカルの `.python_packages/` を無視します。誤ってバンドルしたジップを投入すると `ModuleNotFoundError` が出るため、手動デプロイでも **リモートビルドを有効化** します。
 
 ```bash
-azd deploy functions
+mkdir -p .deploy/functions
+cp -r functions/. .deploy/functions/
+cp workflow/convert_zxu_to_json.py .deploy/functions/   # フラット配置
+
+# zip して Oryx ビルド付きでデプロイ
+cd .deploy/functions && zip -r ../functions.zip . && cd -
+az functionapp deployment source config-zip \
+  -g rg-divelogsite -n func-divelog --src .deploy/functions.zip --build-remote true
+```
+
+### 6.4 検証
+
+```bash
+# 関数が読み込まれているか
+az functionapp function list -g rg-divelogsite -n func-divelog -o table
+# 期待: zxu_change_feed_processor が表示される
 ```
 
 環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。
@@ -306,3 +335,32 @@ az containerapp show -n ca-divelog -g rg-divelogsite \
      --query "[?starts_with(name, 'COSMOS_TRIGGER_CONNECTION')]" -o table
    ```
 3. リース用コンテナ `zxu_uploads_leases` が存在するか確認
+4. **VNet 統合が有効化されているか確認**（Cosmos は Private Endpoint のみ受付）:
+   ```bash
+   az functionapp show -n func-divelog -g rg-divelogsite \
+     --query "{vnetSubnetId:virtualNetworkSubnetId, vnetRouteAll:vnetRouteAllEnabled}"
+   ```
+   `vnetSubnetId` が null の場合は Bicep を再デプロイし、`function-app-subnet` を統合してください。Application Insights の `AppTraces` に `Forbidden (403)` / `originated from IP ... through public internet` が出ている場合は VNet 統合未適用のサインです。
+
+### フロントエンドで `Failed to fetch` / 404 が出る
+
+`VITE_API_BASE_URL` がビルド時に埋め込まれていない可能性があります。SWA の appsettings は Vite のビルドバンドルへは反映されないため、以下で介入します。
+
+```bash
+export VITE_API_BASE_URL=https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io
+cd frontend && npm run build
+# 再デプロイ
+npx @azure/static-web-apps-cli deploy ./dist \
+  --deployment-token $(az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query properties.apiKey -o tsv) \
+  --env production
+```
+
+GitHub Actions を使う場合は Repository Secrets に `VITE_API_BASE_URL` を登録してください（`deploy-frontend.yml` が読み込みます）。
+
+### CSS が崩れる / アイコンが表示されない
+
+`frontend/staticwebapp.config.json` の Content Security Policy で使用中の CDN が許可されているか確認してください。現状は以下を許可しています:
+
+- `script-src`: `'self'` + `https://unpkg.com`（Leaflet / leaflet.heat）
+- `style-src`: `'self'` `'unsafe-inline'` + `https://unpkg.com` + `https://cdn.jsdelivr.net`（Bootstrap / Bootstrap Icons CSS）
+- `font-src`: `'self'` `data:` + `https://cdn.jsdelivr.net`（Bootstrap Icons のフォント）
