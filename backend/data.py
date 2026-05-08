@@ -119,9 +119,9 @@ def search_dives(
             if month_str not in dt:
                 continue
 
-        # ロケーション前方一致
+        # ロケーション部分一致
         loc_name = (d.get("location") or {}).get("name", "") or ""
-        if location and not loc_name.startswith(location):
+        if location and location.lower() not in loc_name.lower():
             continue
 
         # タグ部分一致

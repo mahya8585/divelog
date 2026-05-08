@@ -28,7 +28,7 @@
           </div>
           <div class="col-md-3">
             <label class="form-label small mb-1">
-              <i class="bi bi-geo-alt me-1"></i>ロケーション（前方一致）
+              <i class="bi bi-geo-alt me-1"></i>ロケーション（部分一致）
             </label>
             <input v-model="form.location" type="text" class="form-control form-control-sm"
                    placeholder="例: 沖縄本島" @keyup.enter="doSearch" />
