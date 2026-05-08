@@ -20,6 +20,23 @@ export async function fetchDives(params = {}) {
 }
 
 /**
+ * ZXU ファイルをアップロードしてダイブを登録する
+ * @param {File} file - .zxu ファイル
+ * @returns {Promise<{dive_id: string, message: string}>}
+ */
+export async function uploadDive(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${BASE_URL}/api/dives/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  return data
+}
+
+/**
  * ダイブ詳細を取得する
  * @param {string} diveId
  * @returns {Promise<{dive, tags}>}

@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # アプリケーションコードをコピー
 COPY backend/ ./
+COPY workflow/ ./workflow/
 
 EXPOSE 8000
 
