@@ -173,6 +173,9 @@ def save_dive(dive_data: dict) -> str:
     dive_id = dive_data.get("dive_id")
     if not dive_id:
         raise ValueError("dive_id が必要です")
+    # 保存経路（Cosmos / JSON）にかかわらず入口で必ず検証する。
+    # （ZXU 由来の DUID 等、外部入力をそのまま id にするため defense-in-depth）
+    _validate_dive_id(dive_id)
     if _use_cosmos():
         _save_to_cosmos(dive_data)
     else:

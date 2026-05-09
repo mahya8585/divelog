@@ -37,6 +37,9 @@ param cosmosZxuContainerName string = 'zxu_uploads'
 @secure()
 param secretKey string = ''
 
+@description('Application Insights 接続文字列（省略時は App Insights 送信なし）')
+param appInsightsConnectionString string = ''
+
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -68,8 +71,9 @@ var baseEnv = [
   { name: 'AZURE_CLIENT_ID',      value: uaMI.properties.clientId }
   { name: 'TRUST_PROXY_HOPS',     value: '1' }
 ]
+var appInsightsEnv = !empty(appInsightsConnectionString) ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }] : []
 var secretKeyEnv = !empty(secretKey) ? [{ name: 'SECRET_KEY', secretRef: 'secret-key' }] : []
-var containerEnv = concat(baseEnv, secretKeyEnv)
+var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv)
 
 var containerSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []
 

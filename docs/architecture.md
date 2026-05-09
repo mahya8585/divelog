@@ -178,15 +178,15 @@ npm でインストールしているライブラリ:
 - **タイミング攻撃対策**: ログイン時、ユーザー不在の場合もダミーハッシュに対して `check_password_hash` を実行し、応答時間からのユーザー存在判定を防止
 - **自動ログアウト**: フロントエンドで `mousedown` / `keydown` / `scroll` / `touchstart` イベントを監視し、10分間無操作で自動ログアウト。ログアウト時は `/api/logout` でサーバー側トークンも削除
 - **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
-- **認証バイパス**: `AUTH_DISABLED=true` を明示的に設定した場合のみ認証をスキップ（ローカル開発限定）。未設定時は常に認証必須
+- **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定しても無視され警告ログを出して認証必須として振る舞う（多層防御）
 
 ### アプリケーションセキュリティ
 
-- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分` を設定。`/health` は除外。マルチレプリカ環境では `RATELIMIT_STORAGE_URI` で Redis 等の共有ストレージに切り替え可能
+- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`（IP 単位） + `10/分`（メールアドレス単位の二重制限、複数 IP からの分散ブルートフォース対策）、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分` を設定。`/health` は除外。マルチレプリカ環境では `RATELIMIT_STORAGE_URI` で Redis 等の共有ストレージに切り替え可能
 - **リバースプロキシ対策**: `werkzeug.middleware.proxy_fix.ProxyFix` で Container Apps からの `X-Forwarded-*` ヘッダーを信頼（`TRUST_PROXY_HOPS=1`）。クライアント IP の偽装を防ぎつつレート制限を正しく適用
 - **オープンリダイレクト対策**: ログイン後のリダイレクト先は `redirect.startsWith('/') && !redirect.startsWith('//')` で検証
 - **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを明示。**未設定時は CORS を一切許可しない（フェイルクローズ）** という設計。`supports_credentials=False`、`allow_headers` は `Authorization` / `Content-Type` のみ、`methods` は `GET` / `POST` / `OPTIONS` のみ
-- **入力バリデーション**: `dive_id` パスパラメータは `^[A-Za-z0-9_\-]{1,128}$` で検証
+- **入力バリデーション**: `dive_id` パスパラメータは `^[A-Za-z0-9_\-]{1,128}$` で検証。ルーティングレベルだけでなく `data.save_dive()`（ストレージ書き込み直前）および Functions の Change Feed 処理（`functions/zxu_change_feed_processor.py`）でも同じパターンを再検証し、ZXU 由来の DUID を含めた任意ケースでのパストラバーサル / ドキュメント ID 改ざんを防ぐ（多層防御）
 - **ファイルアップロード**: `POST /api/dives/upload` は `secure_filename` でファイル名をサニタイズし、`.zxu` 拡張子のみ許可。サーバー側で `MAX_CONTENT_LENGTH = 2 MB`（Cosmos ドキュメント上限を考慮）、超過時は 413 を JSON で返す。Cosmos DB 利用時は `zxu_uploads` へ保存し、Change Feed で Azure Functions が非同期変換する。エラー時のレスポンスにスタックトレースを含めない
 - **XXE 対策**: ZXU ファイル内の XML パースに `defusedxml` を **必須** とする（標準 ET へのフォールバックは廃止）
 - **XSS / クリックジャッキング対策**: SWA で以下のセキュリティヘッダを全レスポンスに付与（`frontend/staticwebapp.config.json`）
@@ -195,8 +195,10 @@ npm でインストールしているライブラリ:
     - `X-Frame-Options: DENY`
     - `Referrer-Policy: no-referrer`
     - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
-    - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com` = Leaflet, `cdn.jsdelivr.net` = Bootstrap CSS / Bootstrap Icons フォント）/ タイル (`tile.openstreetmap.org`) / API (`*.azurecontainerapps.io`) のみ許可
-- **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn は `--forwarded-allow-ips "*"` で ProxyFix と整合
+    - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com` = Leaflet, `cdn.jsdelivr.net` = Bootstrap CSS / Bootstrap Icons フォント）/ タイル (`tile.openstreetmap.org`) / API オリジン（デプロイ毎の Container Apps URL） / Application Insights エンドポイントのみ許可。リポジトリ上は `__BACKEND_ORIGIN__` プレースホルダとして保持され、フロントエンドビルド時に `frontend/scripts/process-swa-config.mjs` が `VITE_API_BASE_URL` の `URL.origin` で置換し、`dist/staticwebapp.config.json` を出力する（デプロイごとにバックエンドオリジンをスコープを最小化）
+- **不要な SWA ルーティング削除**: 以前 `staticwebapp.config.json` にあった `/api/*` 匿名アクセスルートは、API を Container Apps に離す以上不要（ローカルの Vite プロキシ、本番は `VITE_API_BASE_URL` で直接参照）のため削除
+- **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn の `--forwarded-allow-ips` は環境変数 `FORWARDED_ALLOW_IPS`（デフォルト `*`）経由で指定し、Container Apps Envoy フロントと整合（厳密にサイドカーの CIDR に絞りたい場合はこの env で上書き可能）
+- **ヒートマップ集計キャッシュ**: `/api/dives` の ヒートマップ / マーカー集計は全件スキャンを伴うため、認証済みリクエスト限定でプロセス内メモリにキャッシュ（TTL: `HEATMAP_CACHE_TTL_SECONDS`, デフォルト 60 秒）。連発リクエストによるスキャン負荷を抑制し、認証済み使い回しトークンでのコストストラングを緩和
 
 ### ネットワークセキュリティ
 
