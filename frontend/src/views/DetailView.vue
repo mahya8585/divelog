@@ -151,6 +151,7 @@ import { useRoute } from 'vue-router'
 import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend, Filler } from 'chart.js'
 import { fetchDive } from '../api/dives.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
+import { escapeHtml } from '../utils/html.js'
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend, Filler)
 
@@ -276,7 +277,7 @@ function buildMap(lat, lon, name) {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map)
   const icon = L.divIcon({ html: '🤿', className: '', iconSize: [28, 28], iconAnchor: [14, 14] })
-  L.marker([lat, lon], { icon }).bindPopup(`<strong>${name || ''}</strong>`).openPopup().addTo(map)
+  L.marker([lat, lon], { icon }).bindPopup(`<strong>${escapeHtml(name || '')}</strong>`).openPopup().addTo(map)
 }
 
 // ── マウント ──────────────────────────────────────────

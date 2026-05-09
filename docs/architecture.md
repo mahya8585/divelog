@@ -193,7 +193,7 @@ npm でインストールしているライブラリ:
     - `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
     - `X-Content-Type-Options: nosniff`
     - `X-Frame-Options: DENY`
-    - `Referrer-Policy: no-referrer`
+    - `Referrer-Policy: strict-origin-when-cross-origin`
     - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
     - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com` = Leaflet, `cdn.jsdelivr.net` = Bootstrap CSS / Bootstrap Icons フォント）/ タイル (`tile.openstreetmap.org`) / API (`*.azurecontainerapps.io`) のみ許可
 - **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn は `--forwarded-allow-ips "*"` で ProxyFix と整合

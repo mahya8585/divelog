@@ -93,6 +93,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchDives } from '../api/dives.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
+import { escapeHtml } from '../utils/html.js'
 
 const route  = useRoute()
 const router = useRouter()
@@ -163,7 +164,7 @@ function updateMap() {
       fillColor: '#00b4d8', color: '#fff',
       weight: 2, opacity: 1, fillOpacity: 0.7,
     })
-      .bindPopup(`<strong>${m.name}</strong><br>${m.count} ダイブ`)
+      .bindPopup(`<strong>${escapeHtml(m.name)}</strong><br>${m.count} ダイブ`)
       .addTo(markerLayer)
   })
   markerLayer.addTo(leafletMap)
