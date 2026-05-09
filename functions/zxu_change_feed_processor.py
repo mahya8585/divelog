@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -8,6 +9,9 @@ from pathlib import Path
 import azure.functions as func
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
+
+# dive_id バリデーション（backend/data.py の _DIVE_ID_RE と同一仕様）
+_DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
 # Azure (Functions ランタイム) では本ファイルと同階層に workflow/ を同梱する。
 # ローカル開発時は1つ上 (リポジトリルート) の workflow/ を参照する。
@@ -52,6 +56,9 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) ->
         dive_id = dive_doc.get("dive_id")
         if not dive_id:
             raise ValueError("変換結果に dive_id がありません")
+        # ZXU 由来の DUID をそのまま id に使うため、入口で必ず検証する
+        if not _DIVE_ID_RE.fullmatch(str(dive_id)):
+            raise ValueError(f"不正な dive_id: {dive_id!r}")
         dive_doc["id"] = dive_id
         dives_container.upsert_item(dive_doc)
 

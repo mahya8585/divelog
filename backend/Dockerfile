@@ -26,4 +26,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read(); sys.exit(0)" || exit 1
 
 # 本番: gunicorn / 開発: flask run
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", "--forwarded-allow-ips", "*", "app:app"]
+# FORWARDED_ALLOW_IPS は gunicorn が X-Forwarded-* ヘッダを信頼する送信元 IP。
+# Container Apps の Envoy ingress 配下では送信元 IP が動的なため "*" を既定とするが、
+# 他環境（直接公開・別リバースプロキシ）にデプロイする場合は必ず実際のプロキシ IP に絞ること。
+ENV FORWARDED_ALLOW_IPS="*"
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 60 --forwarded-allow-ips \"$FORWARDED_ALLOW_IPS\" app:app"]

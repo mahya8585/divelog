@@ -92,7 +92,9 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `ALLOWED_ORIGINS` | (空) | CORS 許可オリジン（カンマ区切り）。**未設定時は CORS 一切不許可（フェイルクローズ）** |
 | `TRUST_PROXY_HOPS` | `1` | `ProxyFix` で信頼するプロキシのホップ数（Container Apps 経由なら `1`） |
 | `RATELIMIT_STORAGE_URI` | `memory://` | レート制限のストレージ。マルチレプリカでは `redis://...` 推奨 |
-| `AUTH_DISABLED` | (空) | `true` を明示設定した場合のみ認証をスキップ（ローカル開発限定） |
+| `HEATMAP_CACHE_TTL_SECONDS` | `60` | `/api/dives` のヒートマップ/マーカー集計キャッシュの TTL 秒。キャッシュはトークン検証後に適用され、連発リクエストによるスキャン負荷を抑制する |
+| `FORWARDED_ALLOW_IPS` | `*`（Dockerfile デフォルト） | gunicorn が `X-Forwarded-*` ヘッダを信頼する送信元 IP。Container Apps の Envoy フロントとして動作させるため `*` を採用し、ProxyFix と二段階で保護 |
+| `AUTH_DISABLED` | (空) | `true` を明示設定し、**かつ `FLASK_DEBUG=true`** のときのみ認証をスキップ（ローカル開発限定、警告ログを出力） |
 | `COSMOS_ENDPOINT` | — | Cosmos DB エンドポイント URL |
 | `COSMOS_KEY` | — | Cosmos DB 主キー（ローカル開発用。本番は Entra ID RBAC 認証を使用） |
 | `COSMOS_DATABASE` | `divelog` | Cosmos DB データベース名 |

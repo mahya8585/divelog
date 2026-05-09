@@ -19,6 +19,8 @@ import re
 import secrets
 import sys
 import tempfile
+import threading
+import time
 from collections import Counter
 from functools import wraps
 from pathlib import Path
@@ -111,8 +113,17 @@ if not _SECRET_KEY:
 # ローカル開発フォールバック用認証情報（Cosmos 未使用時のみ有効）
 _AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
 _AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
-# 認証スキップを許可する明示フラグ（誤設定でのバイパスを防ぐ）
-_AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").lower() == "true"
+# 認証スキップを許可する明示フラグ（誤設定でのバイパスを防ぐ）。
+# 本番環境（FLASK_DEBUG ≠ true）では設定されていても無視し、起動時に警告する。
+_FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "").lower() == "true"
+_AUTH_DISABLED_RAW = os.environ.get("AUTH_DISABLED", "").lower() == "true"
+if _AUTH_DISABLED_RAW and not _FLASK_DEBUG:
+    import warnings
+    warnings.warn(
+        "AUTH_DISABLED=true は FLASK_DEBUG=true 時のみ有効です。本番モードでは無視します。",
+        stacklevel=1,
+    )
+_AUTH_DISABLED = _AUTH_DISABLED_RAW and _FLASK_DEBUG
 
 _TOKEN_MAX_AGE = 10 * 60  # 10 分
 _signer = URLSafeTimedSerializer(_SECRET_KEY)
@@ -178,6 +189,51 @@ else:
     )
 
 
+# ── ヒートマップ TTL キャッシュ ─────────────────────────
+# 全件 load_all_dives() を毎リクエスト走らせると Cosmos の RU 消費・
+# 経済的 DoS につながるため、短時間だけメモリキャッシュする。
+_HEATMAP_CACHE_TTL = int(os.environ.get("HEATMAP_CACHE_TTL_SECONDS", "60"))
+_heatmap_cache_lock = threading.Lock()
+_heatmap_cache: dict = {"expires_at": 0.0, "heatmap": [], "markers": []}
+
+
+def _build_heatmap() -> tuple[list, list]:
+    all_dives = load_all_dives()
+    loc_counter: Counter = Counter()
+    loc_info: dict = {}
+    for d in all_dives:
+        loc = d.get("location") or {}
+        lat = loc.get("gps_lat")
+        lon = loc.get("gps_lon")
+        if lat is not None and lon is not None:
+            key = f"{lat:.6f},{lon:.6f}"
+            loc_counter[key] += 1
+            loc_info[key] = {"lat": lat, "lon": lon, "name": loc.get("name", "")}
+    heatmap = [
+        [info["lat"], info["lon"], loc_counter[k]]
+        for k, info in loc_info.items()
+    ]
+    markers = [
+        {"lat": info["lat"], "lon": info["lon"], "name": info["name"], "count": loc_counter[k]}
+        for k, info in loc_info.items()
+    ]
+    return heatmap, markers
+
+
+def _get_heatmap_cached() -> tuple[list, list]:
+    now = time.time()
+    with _heatmap_cache_lock:
+        if now < _heatmap_cache["expires_at"]:
+            return _heatmap_cache["heatmap"], _heatmap_cache["markers"]
+    # キャッシュ外でビルド（ロック保持時間を短くする）
+    heatmap, markers = _build_heatmap()
+    with _heatmap_cache_lock:
+        _heatmap_cache["heatmap"] = heatmap
+        _heatmap_cache["markers"] = markers
+        _heatmap_cache["expires_at"] = time.time() + _HEATMAP_CACHE_TTL
+    return heatmap, markers
+
+
 # ── ヘルスチェック ────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
@@ -190,6 +246,12 @@ def health():
 
 @app.route("/api/login", methods=["POST"])
 @limiter.limit("5 per minute")
+# 同一アカウントへの分散ブルートフォース対策: email 単位でも制限する。
+# IP × email の双方で制限することで、複数 IP からの単一アカウント狙いを抑止。
+@limiter.limit(
+    "10 per minute",
+    key_func=lambda: ((request.get_json(silent=True) or {}).get("email") or "").strip().lower() or get_remote_address(),
+)
 def login():
     data = request.get_json(silent=True) or {}
     email    = (data.get("email") or "").strip()
@@ -260,27 +322,8 @@ def get_dives():
         else load_all_dives()
     )
 
-    # ヒートマップ・マーカー用データ（常に全件から生成）
-    all_dives = load_all_dives()
-    loc_counter: Counter = Counter()
-    loc_info: dict = {}
-    for d in all_dives:
-        loc = d.get("location") or {}
-        lat = loc.get("gps_lat")
-        lon = loc.get("gps_lon")
-        if lat is not None and lon is not None:
-            key = f"{lat:.6f},{lon:.6f}"
-            loc_counter[key] += 1
-            loc_info[key] = {"lat": lat, "lon": lon, "name": loc.get("name", "")}
-
-    heatmap_data = [
-        [info["lat"], info["lon"], loc_counter[k]]
-        for k, info in loc_info.items()
-    ]
-    markers_data = [
-        {"lat": info["lat"], "lon": info["lon"], "name": info["name"], "count": loc_counter[k]}
-        for k, info in loc_info.items()
-    ]
+    # ヒートマップ・マーカー用データ（全件集計）は TTL キャッシュで RU 消費と DoS 增幅を抑制
+    heatmap_data, markers_data = _get_heatmap_cached()
 
     return jsonify({
         "dives": dives,

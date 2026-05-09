@@ -104,6 +104,8 @@ npm run build
 
 > **Important**: `VITE_API_BASE_URL` は Vite のビルド時に JS ファイルにハードコードされます。SWA のアプリ設定で設定しても実行時には反映されません。バックエンド URL が変更された場合は再ビルド・再デプロイが必要です。
 
+> **CSP の動的生成**: `npm run build` は Vite ビルド後に `frontend/scripts/process-swa-config.mjs` を実行し、`staticwebapp.config.json` 内の `__BACKEND_ORIGIN__` プレースホルダを `VITE_API_BASE_URL` の `URL.origin`（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）で置換した上で `dist/staticwebapp.config.json` を出力します。これにより CSP `connect-src` はそのデプロイのバックエンドオリジンのみを許可します（`*.azurecontainerapps.io` ワイルドカードより厳しいスコープ）。`VITE_API_BASE_URL` 未設定時は空文字列にフォールバックされ、同一オリジンのみ許可されます。
+
 ### Static Web Apps CLI でデプロイ
 
 ```bash
