@@ -1,5 +1,15 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
+
+// スタイル / 3rd party ライブラリをバンドルに取り込む（サプライチェーン対策、CSP 'self' のみ）
+import 'bootstrap/dist/css/bootstrap.min.css'
+import 'bootstrap-icons/font/bootstrap-icons.css'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
+import 'leaflet.heat'
+// 既存コードが window.L を使うためグローバルに公開
+window.L = L
+
 import App from './App.vue'
 import HomeView from './views/HomeView.vue'
 import DetailView from './views/DetailView.vue'

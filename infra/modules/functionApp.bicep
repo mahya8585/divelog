@@ -16,6 +16,7 @@ param cosmosDatabaseName string
 param cosmosZxuContainerName string
 param cosmosZxuLeasesContainerName string
 param cosmosDivesContainerName string
+param cosmosLocationKnowledgeContainerName string
 param logAnalyticsWorkspaceId string
 param functionSubnetId string
 
@@ -132,6 +133,12 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: hostingPlan.id
     httpsOnly: true
+    // この Function App は HTTP トリガーを持たない（Cosmos Change Feed のみ）ため、
+    // メインサイトの公開面は ipSecurityRestrictions で全拒否し、SCM (Kudu) は
+    // GitHub Actions からのデプロイのために残す（scmIpSecurityRestrictionsUseMain=false）。
+    // 完全に SCM も塞ぐ場合は publicNetworkAccess: 'Disabled' に切り替え、セルフホストランナー
+    // または Private Endpoint デプロイへ移行すること。
+    publicNetworkAccess: 'Enabled'
     keyVaultReferenceIdentity: uaMI.id
     virtualNetworkSubnetId: functionSubnetId
     vnetRouteAllEnabled: true
@@ -158,6 +165,21 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
+      // メインサイト (Functions runtime endpoint) は全拒否。HTTP トリガーを持たないため
+      // 外部から呼び出される必要がなく、誤って HTTP トリガー関数を追加してしまった場合の
+      // 多層防御として機能する。
+      ipSecurityRestrictionsDefaultAction: 'Deny'
+      ipSecurityRestrictions: [
+        {
+          ipAddress: 'Any'
+          action: 'Deny'
+          priority: 2147483647
+          name: 'Deny all'
+        }
+      ]
+      // SCM (Kudu) はメインサイト設定を継承せず、GitHub Actions からのデプロイを許可するため Allow。
+      scmIpSecurityRestrictionsUseMain: false
+      scmIpSecurityRestrictionsDefaultAction: 'Allow'
       appSettings: [
         // AzureWebJobsStorage（マネージド ID 接続）
         {
@@ -205,6 +227,14 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'COSMOS_ZXU_LEASES_CONTAINER'
           value: cosmosZxuLeasesContainerName
+        }
+        {
+          name: 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER'
+          value: cosmosLocationKnowledgeContainerName
+        }
+        {
+          name: 'LOCATION_LLM_CONFIG_PATH'
+          value: '/home/site/wwwroot/config/location_llm_config.json'
         }
         {
           name: 'AZURE_CLIENT_ID'

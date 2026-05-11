@@ -5,12 +5,15 @@
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 # ── パス ────────────────────────────────────────────────
 # 環境変数 JSON_DIR が設定されていればそちらを使う（Docker コンテナ内など）
@@ -25,9 +28,14 @@ COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
 COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
 COSMOS_TOKENS_CONTAINER = os.environ.get("COSMOS_TOKENS_CONTAINER", "tokens")
 COSMOS_ZXU_CONTAINER    = os.environ.get("COSMOS_ZXU_CONTAINER", "zxu_uploads")
+COSMOS_LOCATION_KNOWLEDGE_CONTAINER = os.environ.get(
+    "COSMOS_LOCATION_KNOWLEDGE_CONTAINER",
+    "location_knowledge",
+)
 
-# トークン有効期限（秒）: 10 分
-TOKEN_TTL_SECONDS = 10 * 60
+# トークン有効期限（秒）。環境変数 TOKEN_TTL_SECONDS で上書き可能。
+# デフォルト 600 = 10 分。Cosmos tokens コンテナの defaultTtl と一致させること。
+TOKEN_TTL_SECONDS = int(os.environ.get("TOKEN_TTL_SECONDS", "600"))
 
 
 def _use_cosmos() -> bool:
@@ -89,15 +97,38 @@ def _get_zxu_container():
     )
 
 
-def _load_all_from_cosmos() -> list[dict]:
+def _get_location_knowledge_container():
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_LOCATION_KNOWLEDGE_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+    )
+
+
+def _load_all_from_cosmos(owner_email: str | None = None) -> list[dict]:
     container = _get_container()
+    if owner_email:
+        # 既存ドキュメントとの後方互換のため、owner_email 未設定のドキュメントも許可する。
+        query = (
+            "SELECT * FROM c "
+            "WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner "
+            "ORDER BY c.dive_info.datetime DESC"
+        )
+        params = [{"name": "@owner", "value": owner_email}]
+        return list(container.query_items(query, parameters=params, enable_cross_partition_query=True))
     query = "SELECT * FROM c ORDER BY c.dive_info.datetime DESC"
     return list(container.query_items(query, enable_cross_partition_query=True))
 
 
-def _load_one_from_cosmos(dive_id: str) -> dict:
+def _load_one_from_cosmos(dive_id: str, owner_email: str | None = None) -> dict:
     container = _get_container()
-    return container.read_item(item=dive_id, partition_key=dive_id)
+    item = container.read_item(item=dive_id, partition_key=dive_id)
+    if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
+        from azure.cosmos.exceptions import CosmosResourceNotFoundError
+        raise CosmosResourceNotFoundError(message="Not found", status_code=404)
+    return item
 
 
 # ── JSON ファイルへ書き込む ────────────────────────────────
@@ -128,17 +159,21 @@ def _save_to_cosmos(dive_data: dict) -> None:
 
 # ── 公開 API（ダイブデータ） ──────────────────────────────
 
-def load_all_dives() -> list[dict]:
-    """全ダイブデータを日時降順で返す。"""
+def load_all_dives(owner_email: str | None = None) -> list[dict]:
+    """全ダイブデータを日時降順で返す。owner_email 指定時はそのユーザーのデータのみ。"""
     if _use_cosmos():
-        return _load_all_from_cosmos()
+        return _load_all_from_cosmos(owner_email=owner_email)
     return _load_all_from_json()
 
 
-def load_dive(dive_id: str) -> dict:
-    """指定 ID のダイブデータを返す。存在しない場合は FileNotFoundError。"""
+def load_dive(dive_id: str, owner_email: str | None = None) -> dict:
+    """指定 ID のダイブデータを返す。存在しない / 他ユーザーのデータの場合は FileNotFoundError。"""
     if _use_cosmos():
-        return _load_one_from_cosmos(dive_id)
+        from azure.cosmos.exceptions import CosmosResourceNotFoundError
+        try:
+            return _load_one_from_cosmos(dive_id, owner_email=owner_email)
+        except CosmosResourceNotFoundError as e:
+            raise FileNotFoundError(str(dive_id)) from e
     return _load_one_from_json(dive_id)
 
 
@@ -149,15 +184,16 @@ def extract_tags(memo: str) -> list[str]:
     return re.findall(r"#(\S+)", memo)
 
 
-def dive_exists(dive_id: str) -> bool:
+def dive_exists(dive_id: str, owner_email: str | None = None) -> bool:
     """指定 ID のダイブデータが存在するかを返す。
     存在しない場合のみ False。その他の例外はそのまま伝搬し、
     「ネットワークエラーだが上書きされる」という誤動作を防ぐ。
+    owner_email 指定時は他者ドキュメントは「存在しない」として扱う。
     """
     if _use_cosmos():
         from azure.cosmos.exceptions import CosmosResourceNotFoundError
         try:
-            _load_one_from_cosmos(dive_id)
+            _load_one_from_cosmos(dive_id, owner_email=owner_email)
             return True
         except CosmosResourceNotFoundError:
             return False
@@ -168,14 +204,15 @@ def dive_exists(dive_id: str) -> bool:
         return False
 
 
-def save_dive(dive_data: dict) -> str:
-    """ダイブデータを保存し、dive_id を返す。"""
+def save_dive(dive_data: dict, owner_email: str | None = None) -> str:
+    """ダイブデータを保存し、dive_id を返す。owner_email 指定時はドキュメントに埋め込む。"""
     dive_id = dive_data.get("dive_id")
     if not dive_id:
         raise ValueError("dive_id が必要です")
-    # 保存経路（Cosmos / JSON）にかかわらず入口で必ず検証する。
-    # （ZXU 由来の DUID 等、外部入力をそのまま id にするため defense-in-depth）
     _validate_dive_id(dive_id)
+    if owner_email:
+        dive_data = dict(dive_data)
+        dive_data["owner_email"] = owner_email
     if _use_cosmos():
         _save_to_cosmos(dive_data)
     else:
@@ -183,20 +220,68 @@ def save_dive(dive_data: dict) -> str:
     return dive_id
 
 
-def save_zxu_upload(zxu_text: str, filename: str) -> str:
+def save_zxu_upload(zxu_text: str, filename: str, owner_email: str | None = None) -> str:
     """ZXU 生データを Cosmos DB に保存し、アップロード ID を返す。"""
     if not _use_cosmos():
         raise RuntimeError("Cosmos DB が設定されていません")
     upload_id = str(uuid4())
     container = _get_zxu_container()
-    container.create_item({
+    doc = {
         "id": upload_id,
         "filename": filename,
         "zxu_text": zxu_text,
         "status": "uploaded",
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    if owner_email:
+        doc["owner_email"] = owner_email
+    container.create_item(doc)
     return upload_id
+
+
+def get_zxu_upload(upload_id: str, owner_email: str | None = None) -> dict | None:
+    """ZXU アップロード受付データを返す。存在しない / 他ユーザーの場合は None。"""
+    if not _use_cosmos():
+        return None
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    try:
+        container = _get_zxu_container()
+        item = container.read_item(item=upload_id, partition_key=upload_id)
+    except CosmosResourceNotFoundError:
+        return None
+    if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
+        return None
+    return item
+
+
+def upsert_zxu_upload(upload_doc: dict) -> None:
+    """ZXU アップロード受付データを upsert する。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    _get_zxu_container().upsert_item(upload_doc)
+
+
+def save_location_knowledge_feedback(
+    upload_id: str,
+    decision: str,
+    original_location: dict | None,
+    proposed_location: dict | None,
+    final_location: dict | None,
+) -> str:
+    """ロケーション名/GPS 提案に対する承認結果をナレッジとして保存する。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    item_id = str(uuid4())
+    _get_location_knowledge_container().create_item({
+        "id": item_id,
+        "upload_id": upload_id,
+        "decision": decision,
+        "original_location": original_location or {},
+        "proposed_location": proposed_location or {},
+        "final_location": final_location or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return item_id
 
 
 def search_dives(
@@ -204,9 +289,10 @@ def search_dives(
     year: str | None = None,
     month: str | None = None,
     location: str | None = None,
+    owner_email: str | None = None,
 ) -> list[dict]:
     """条件に合うダイブデータを返す。"""
-    dives = load_all_dives()
+    dives = load_all_dives(owner_email=owner_email)
     results: list[dict] = []
 
     for d in dives:
@@ -253,10 +339,15 @@ def _get_users_container():
 
 def get_user(email: str) -> dict | None:
     """指定メールアドレスのユーザーを返す。存在しない場合は None。"""
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
     try:
         container = _get_users_container()
         return container.read_item(item=email, partition_key=email)
+    except CosmosResourceNotFoundError:
+        return None
     except Exception:
+        # Cosmos 障害等を検知可能にするためログ出力。フェイルセーフに None を返す。
+        _logger.exception("get_user で Cosmos アクセスに失敗しました")
         return None
 
 

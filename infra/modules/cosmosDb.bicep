@@ -6,6 +6,7 @@
     - コンテナ: users  / パーティションキー: /id       — ユーザー認証情報
     - コンテナ: tokens / パーティションキー: /id       — 認証トークン（TTL 10 分）
     - コンテナ: zxu_uploads / パーティションキー: /id  — ZXU 生データ（Change Feed トリガー用）
+    - コンテナ: location_knowledge / パーティションキー: /id — ロケーション承認ナレッジ
 */
 
 param accountName  string
@@ -27,6 +28,9 @@ param zxuContainerName string = 'zxu_uploads'
 
 @description('ZXU Change Feed の Lease 用コンテナ名（Functions が利用）')
 param zxuLeasesContainerName string = 'zxu_uploads_leases'
+
+@description('ロケーション提案の承認/却下ナレッジ用コンテナ名')
+param locationKnowledgeContainerName string = 'location_knowledge'
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name    : accountName
@@ -143,6 +147,21 @@ resource zxuLeasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
+// ── location_knowledge コンテナ（ロケーション承認ナレッジ）──
+resource locationKnowledgeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name  : locationKnowledgeContainerName
+  properties: {
+    resource: {
+      id          : locationKnowledgeContainerName
+      partitionKey: {
+        paths: ['/id']
+        kind : 'Hash'
+      }
+    }
+  }
+}
+
 output endpoint   string = cosmosAccount.properties.documentEndpoint
 output accountId  string = cosmosAccount.id
 output accountName string = cosmosAccount.name
@@ -150,3 +169,4 @@ output databaseName string = cosmosDatabase.name
 output zxuContainerName string = zxuContainer.name
 output zxuLeasesContainerName string = zxuLeasesContainer.name
 output divesContainerName string = cosmosContainer.name
+output locationKnowledgeContainerName string = locationKnowledgeContainer.name

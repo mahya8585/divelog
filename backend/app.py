@@ -21,11 +21,12 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from collections import Counter
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -53,13 +54,16 @@ from data import (
     delete_token,
     dive_exists,
     extract_tags,
+    get_zxu_upload,
     get_token_email,
     get_user,
     load_all_dives,
     load_dive,
     save_dive,
+    save_location_knowledge_feedback,
     save_zxu_upload,
     save_token,
+    upsert_zxu_upload,
 )
 
 try:
@@ -69,6 +73,7 @@ except ImportError:
 
 # dive_id バリデーション用パターン（data._validate_dive_id と同一）
 _DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+_UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9\-]{1,128}$")
 
 app = Flask(__name__)
 
@@ -86,13 +91,22 @@ app.wsgi_app = ProxyFix(
     x_prefix=_TRUST_PROXY_HOPS,
 )
 
-# レートリミッター（ブルートフォース対策 / DoS 緩和）
-# NOTE: storage_uri は本番では Redis 等の共有ストアに変更すること（複数レプリカで状態が分裂するため）。
+# レートリミッター　（ブルートフォース対策 / DoS 緩和）
+# 本番では RATELIMIT_STORAGE_URI に Redis を指定し、複数レプリカ間で状態を共有する。
+# memory:// フォールバックは複数レプリカでは状態が分裂するため、本番では警告を出す。
+_RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
+if _RATELIMIT_STORAGE_URI == "memory://" and os.environ.get("FLASK_DEBUG", "").lower() != "true":
+    import warnings
+    warnings.warn(
+        "RATELIMIT_STORAGE_URI が memory:// です。複数レプリカ環境ではレート制限がレプリカ毎に分裂します。"
+        "本番では Redis などの共有ストアを設定してください。",
+        stacklevel=1,
+    )
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["200 per minute"],
-    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
+    storage_uri=_RATELIMIT_STORAGE_URI,
 )
 
 # アップロードサイズ上限 (Cosmos ドキュメント上限 2MB に合わせる)
@@ -125,7 +139,7 @@ if _AUTH_DISABLED_RAW and not _FLASK_DEBUG:
     )
 _AUTH_DISABLED = _AUTH_DISABLED_RAW and _FLASK_DEBUG
 
-_TOKEN_MAX_AGE = 10 * 60  # 10 分
+_TOKEN_MAX_AGE = int(os.environ.get("TOKEN_TTL_SECONDS", "600"))  # Cosmos tokens TTL と一致させる
 _signer = URLSafeTimedSerializer(_SECRET_KEY)
 
 # タイミング攻撃対策用ダミーハッシュ（プロセス起動時に固定）
@@ -150,25 +164,34 @@ def _verify_token_signed(token: str) -> bool:
 def require_auth(f):
     """認証デコレータ。
     - AUTH_DISABLED=true の場合のみスキップ（明示フラグ必須）。
-    - Cosmos 設定時: tokens コンテナで検証
-    - 未設定時:    itsdangerous 署名トークンで検証
+    - Cosmos 設定時: tokens コンテナで検証し、g.current_email に email を格納する。
+    - 未設定時:    itsdangerous 署名トークンで検証し、_AUTH_EMAIL を g.current_email に格納する。
     """
     @wraps(f)
     def decorated(*args, **kwargs):
         if _AUTH_DISABLED:
+            g.current_email = _AUTH_EMAIL or "dev@local"
             return f(*args, **kwargs)
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return jsonify({"error": "認証が必要です"}), 401
         token = auth_header[7:]
         if _use_cosmos():
-            if get_token_email(token) is None:
+            email = get_token_email(token)
+            if email is None:
                 return jsonify({"error": "認証が必要です"}), 401
+            g.current_email = email
         else:
             if not _verify_token_signed(token):
                 return jsonify({"error": "認証が必要です"}), 401
+            g.current_email = _AUTH_EMAIL
         return f(*args, **kwargs)
     return decorated
+
+
+def _current_owner() -> str | None:
+    """現在の認証ユーザーの email を owner スコープキーとして返す。未認証時は None。"""
+    return getattr(g, "current_email", None) or None
 
 
 # CORS: 本番では ALLOWED_ORIGINS を必須とし、未設定なら拒否（フェイルクローズ）
@@ -316,10 +339,11 @@ def get_dives():
     month = month_s if month_s.isdigit() else None
 
     has_search = any([tag, year, month, location])
+    owner = _current_owner()
     dives = (
-        search_dives(tag=tag, year=year, month=month, location=location)
+        search_dives(tag=tag, year=year, month=month, location=location, owner_email=owner)
         if has_search
-        else load_all_dives()
+        else load_all_dives(owner_email=owner)
     )
 
     # ヒートマップ・マーカー用データ（全件集計）は TTL キャッシュで RU 消費と DoS 增幅を抑制
@@ -350,6 +374,7 @@ def upload_dive():
         return jsonify({"error": "ZXU ファイルのみ対応しています"}), 400
 
     tmp_path = None
+    owner = _current_owner()
     try:
         if _use_cosmos():
             raw = uploaded_file.read()
@@ -359,7 +384,7 @@ def upload_dive():
                 zxu_text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 return jsonify({"error": "ZXU ファイルの文字コードが不正です"}), 400
-            upload_id = save_zxu_upload(zxu_text, filename)
+            upload_id = save_zxu_upload(zxu_text, filename, owner_email=owner)
             return jsonify({
                 "upload_id": upload_id,
                 "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。",
@@ -374,8 +399,8 @@ def upload_dive():
             return jsonify({"error": "サーバー設定エラーが発生しました"}), 500
 
         dive_data = _convert_zxu(Path(tmp_path))
-        overwritten = dive_exists(dive_data.get("dive_id", ""))
-        dive_id = save_dive(dive_data)
+        overwritten = dive_exists(dive_data.get("dive_id", ""), owner_email=owner)
+        dive_id = save_dive(dive_data, owner_email=owner)
         msg = "既存のデータを上書きしました" if overwritten else "登録が完了しました"
         return jsonify({"dive_id": dive_id, "message": msg, "overwritten": overwritten}), 201
 
@@ -387,6 +412,91 @@ def upload_dive():
             os.unlink(tmp_path)
 
 
+@app.route("/api/dives/uploads/<upload_id>", methods=["GET"])
+@require_auth
+@limiter.limit("60 per minute")
+def get_upload_status(upload_id: str):
+    if not _UPLOAD_ID_RE.fullmatch(upload_id):
+        return jsonify({"error": "Invalid upload_id"}), 400
+    if not _use_cosmos():
+        return jsonify({"error": "この環境では利用できません"}), 400
+    upload_doc = get_zxu_upload(upload_id, owner_email=_current_owner())
+    if upload_doc is None:
+        return jsonify({"error": "Upload not found"}), 404
+    return jsonify({
+        "upload_id": upload_doc.get("id"),
+        "status": upload_doc.get("status"),
+        "message": upload_doc.get("error"),
+        "processed_dive_id": upload_doc.get("processed_dive_id"),
+        "proposal": upload_doc.get("location_proposal"),
+    })
+
+
+@app.route("/api/dives/uploads/<upload_id>/decision", methods=["POST"])
+@require_auth
+@limiter.limit("30 per minute")
+def decide_upload_location(upload_id: str):
+    if not _UPLOAD_ID_RE.fullmatch(upload_id):
+        return jsonify({"error": "Invalid upload_id"}), 400
+    if not _use_cosmos():
+        return jsonify({"error": "この環境では利用できません"}), 400
+    payload = request.get_json(silent=True) or {}
+    decision = (payload.get("decision") or "").strip().lower()
+    if decision not in ("accept", "reject"):
+        return jsonify({"error": "decision は accept または reject を指定してください"}), 400
+
+    owner = _current_owner()
+    upload_doc = get_zxu_upload(upload_id, owner_email=owner)
+    if upload_doc is None:
+        return jsonify({"error": "Upload not found"}), 404
+    if upload_doc.get("status") != "proposal_ready":
+        return jsonify({"error": "このアップロードは承認待ちではありません"}), 409
+
+    dive_id = upload_doc.get("processed_dive_id")
+    if not dive_id:
+        return jsonify({"error": "処理済みのダイブ ID が見つかりません"}), 409
+    try:
+        dive = load_dive(dive_id, owner_email=owner)
+    except FileNotFoundError:
+        return jsonify({"error": "処理済みデータが見つかりません"}), 404
+    except Exception:
+        app.logger.exception("承認処理でダイブ取得に失敗しました")
+        return jsonify({"error": "承認処理に失敗しました"}), 500
+    original_location = dict(dive.get("location") or {})
+    proposed_location = (
+        (upload_doc.get("location_proposal") or {}).get("proposed_location")
+        or {}
+    )
+
+    final_location = dict(original_location)
+    if decision == "accept" and proposed_location:
+        final_location["name"] = proposed_location.get("name")
+        final_location["gps_lat"] = proposed_location.get("gps_lat")
+        final_location["gps_lon"] = proposed_location.get("gps_lon")
+        dive["location"] = final_location
+        save_dive(dive, owner_email=owner)
+
+    save_location_knowledge_feedback(
+        upload_id=upload_id,
+        decision=decision,
+        original_location=original_location,
+        proposed_location=proposed_location,
+        final_location=final_location,
+    )
+    upload_doc["status"] = "accepted" if decision == "accept" else "rejected"
+    upload_doc["decision"] = decision
+    upload_doc["decided_at"] = datetime.now(timezone.utc).isoformat()
+    upload_doc["final_location"] = final_location
+    upsert_zxu_upload(upload_doc)
+
+    return jsonify({
+        "upload_id": upload_id,
+        "status": upload_doc["status"],
+        "processed_dive_id": dive_id,
+        "final_location": final_location,
+    })
+
+
 @app.route("/api/dives/<dive_id>", methods=["GET"])
 @require_auth
 @limiter.limit("60 per minute")
@@ -394,7 +504,7 @@ def get_dive(dive_id: str):
     if not _DIVE_ID_RE.fullmatch(dive_id):
         return jsonify({"error": "Invalid dive_id"}), 400
     try:
-        dive = load_dive(dive_id)
+        dive = load_dive(dive_id, owner_email=_current_owner())
     except FileNotFoundError:
         return jsonify({"error": "Dive not found"}), 404
     except Exception:

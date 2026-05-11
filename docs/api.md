@@ -272,6 +272,8 @@ file=<dive.zxu>
 | `upload_id` | string | ZXU 受付データの ID（Change Feed 処理追跡用） |
 | `message` | string | 受付メッセージ |
 
+> 変換後にロケーション提案が生成された場合、`GET /api/dives/uploads/{upload_id}` で `proposal_ready` を取得し、`POST /api/dives/uploads/{upload_id}/decision` で承認/却下します。
+
 #### Cosmos DB 未利用時: 201 Created（従来の同期変換）
 
 ```json
@@ -302,7 +304,51 @@ file=<dive.zxu>
 1. アップロードされたファイルの拡張子を検証（`.zxu` のみ許可）
 2. Cosmos DB 利用時: `zxu_uploads` コンテナへ ZXU 生データを保存して 202 を返す
 3. Cosmos DB の Change Feed をトリガーに Azure Functions が実行され、`workflow/convert_zxu_to_json.py` で JSON へ変換
-4. 変換結果を `dives` コンテナへ upsert し、`zxu_uploads` のステータスを更新
-5. Cosmos DB 未利用時のみ、従来通り API 内で同期変換して保存
+4. 変換結果を `dives` コンテナへ upsert し、LLM 設定がある場合は構造化出力でロケーション提案を生成
+5. 提案がある場合は `zxu_uploads` のステータスを `proposal_ready` にして承認待ちにする
+6. `accept/reject` 送信時に最終ロケーションを確定し、`location_knowledge` コンテナへ承認結果を保存する
+7. Cosmos DB 未利用時のみ、従来通り API 内で同期変換して保存
 
 > **セキュリティ**: エラー発生時のレスポンスにはスタックトレースを含めず、サニタイズされたメッセージのみ返します。詳細はサーバーログに記録されます。
+
+---
+
+## `GET /api/dives/uploads/{upload_id}`
+
+非同期アップロードの処理状況を取得する。
+
+### レスポンス例
+
+```json
+{
+  "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
+  "status": "proposal_ready",
+  "processed_dive_id": "7072_49450_20251220100700_1",
+  "proposal": {
+    "needs_confirmation": true,
+    "confidence": 0.92,
+    "reason": "名称と座標に差分があるため確認が必要",
+    "proposed_location": {
+      "name": "沖縄本島: ゴリラチョップ",
+      "gps_lat": 26.636187,
+      "gps_lon": 127.883063
+    }
+  }
+}
+```
+
+---
+
+## `POST /api/dives/uploads/{upload_id}/decision`
+
+ロケーション提案の承認/却下を送信する。
+
+### リクエスト
+
+```json
+{
+  "decision": "accept"
+}
+```
+
+`decision` は `accept` または `reject`。

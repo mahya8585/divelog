@@ -46,6 +46,7 @@ var funcName    = 'func-${appName}'
 // Storage アカウント名は英数小文字 3-24
 var storageName = take(toLower(replace('st${appName}${uniqueString(resourceGroup().id)}', '-', '')), 24)
 var aiName      = 'appi-${appName}'
+var redisName   = 'redis-${appName}-${take(uniqueString(resourceGroup().id), 6)}'
 
 // ── モジュール ─────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ module cosmos 'modules/cosmosDb.bicep' = {
     databaseName    : 'divelog'
     containerName   : 'dives'
     zxuContainerName: 'zxu_uploads'
+    locationKnowledgeContainerName: 'location_knowledge'
   }
 }
 
@@ -101,6 +103,15 @@ module frontend 'modules/staticWebApp.bicep' = {
   }
 }
 
+// 5b. Redis（レート制限用共有ストア）— SWA より先に SKU 課金が始まる可能性があるため backend より前に作成
+module redis 'modules/redisCache.bicep' = {
+  name: 'redis'
+  params: {
+    name    : redisName
+    location: location
+  }
+}
+
 // 6. Container Apps（CORS に SWA URL を渡す）
 module backend 'modules/containerApp.bicep' = {
   name: 'backend'
@@ -117,8 +128,13 @@ module backend 'modules/containerApp.bicep' = {
     cosmosEndpoint              : cosmos.outputs.endpoint
     cosmosDatabaseName          : cosmos.outputs.databaseName
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
+    cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     secretKey                   : secretKey
     appInsightsConnectionString : functions.outputs.appInsightsConnectionString
+    redisHostName               : redis.outputs.hostName
+    redisSslPort                : redis.outputs.sslPort
+    redisResourceId             : redis.outputs.resourceId
+    tokenTtlSeconds             : 600
   }
 }
 
@@ -135,6 +151,7 @@ module functions 'modules/functionApp.bicep' = {
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
     cosmosZxuLeasesContainerName: cosmos.outputs.zxuLeasesContainerName
     cosmosDivesContainerName    : cosmos.outputs.divesContainerName
+    cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
     functionSubnetId            : network.outputs.fnSubnetId
   }
@@ -184,3 +201,4 @@ output backendUrl      string = backend.outputs.fqdn
 output frontendUrl     string = frontend.outputs.url
 output cosmosEndpoint  string = cosmos.outputs.endpoint
 output functionAppName string = functions.outputs.functionAppName
+output redisHostName   string = redis.outputs.hostName

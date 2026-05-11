@@ -26,6 +26,9 @@ jobs:
         env:
           # Vite はビルド時に VITE_ プレフィックス環境変数をバンドルへ埋め込む
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          # CSP の connect-src に App Insights ingestion オリジンを動的に許可するために必要。
+          # 未設定でもビルドは通る（その場合 ingestion へのテレメトリ送信が CSP で遮断される）。
+          VITE_APPINSIGHTS_CONNECTION_STRING: ${{ secrets.VITE_APPINSIGHTS_CONNECTION_STRING }}
         with:
           azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}

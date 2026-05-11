@@ -51,6 +51,24 @@ export async function uploadDive(file) {
   return data
 }
 
+export async function fetchUploadStatus(uploadId) {
+  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  return data
+}
+
+export async function submitUploadDecision(uploadId, decision) {
+  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  return data
+}
+
 /**
  * ダイブ詳細を取得する
  * @param {string} diveId
