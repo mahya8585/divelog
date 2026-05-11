@@ -81,6 +81,25 @@ def _load_llm_config() -> dict:
     return _LLM_CONFIG_CACHE
 
 
+def _sanitize_for_prompt(text: str | None, max_len: int = 100) -> str:
+    """ユーザー入力を LLM プロンプトに埋め込む際のサニタイズ。
+    - 制御文字を除去
+    - プロンプトインジェクションで多用されるデリミタ（バックティック / 中括弧 / 山括弧）を除去
+    - 長さを制限
+    """
+    if not text:
+        return ""
+    s = str(text)
+    # 制御文字とバックティックを除去
+    s = re.sub(r"[\x00-\x1f\x7f`]", " ", s)
+    # プロンプト区切り記号を除去
+    s = s.replace("{", " ").replace("}", " ").replace("<", " ").replace(">", " ")
+    s = s.strip()
+    if len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
 def _build_location_proposal(location: dict, knowledge_examples: list[dict]) -> dict | None:
     api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -92,8 +111,10 @@ def _build_location_proposal(location: dict, knowledge_examples: list[dict]) -> 
         logging.exception("LLM 設定ファイルの読み込みに失敗しました")
         return None
     model = config.get("model", "gpt-4.1-mini")
+    # プロンプトインジェクション対策: location.name はユーザー入力なのでサニタイズしてから埋め込む。
+    safe_name = _sanitize_for_prompt(location.get("name"), max_len=100)
     user_prompt = (config.get("user_prompt_template") or "").format(
-        location_name=(location.get("name") or ""),
+        location_name=safe_name,
         gps_lat=location.get("gps_lat"),
         gps_lon=location.get("gps_lon"),
         examples_json=json.dumps(knowledge_examples, ensure_ascii=False),
@@ -161,6 +182,11 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container, kn
         if not _DIVE_ID_RE.fullmatch(str(dive_id)):
             raise ValueError(f"不正な dive_id: {dive_id!r}")
         dive_doc["id"] = dive_id
+        # 認可スコープ伝携: upload_doc の owner_email を dive ドキュメントにもコピーして
+        # バックエンド API での他者アクセスを防ぐ。
+        owner_email = upload_doc.get("owner_email")
+        if owner_email:
+            dive_doc["owner_email"] = owner_email
         dives_container.upsert_item(dive_doc)
 
         location = dict(dive_doc.get("location") or {})

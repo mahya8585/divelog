@@ -58,6 +58,7 @@
 | リソース | SKU | 用途 |
 |---|---|---|
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
+| Azure Cache for Redis | Basic C0 (TLS 1.2 / nonSSL 無効) | flask-limiter の共有ストア（マルチレプリカでのレート制限状態共有） |
 | Azure Container Apps | Consumption (`minReplicas: 1`, VNet 統合) | Flask API ホスティング |
 | Azure Functions | Flex Consumption (FC1, Python 3.11) | Cosmos DB Change Feed で ZXU → JSON 変換 |
 | Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`) | Functions ランタイム用（MI 接続） |
@@ -139,24 +140,21 @@ divelog/
 
 ---
 
-## フロントエンド CDN 依存
+## フロントエンド依存ライブラリ
 
-`frontend/index.html` で CDN から読み込んでいるライブラリ:
-
-| ライブラリ | バージョン | 用途 |
-|---|---|---|
-| Bootstrap | 5.3.2 | CSS フレームワーク |
-| Bootstrap Icons | 1.11.3 | アイコン |
-| Leaflet | 1.9.4 | 地図表示 |
-| leaflet.heat | 0.2.0 | ヒートマップレイヤー |
-
-npm でインストールしているライブラリ:
+すべて npm でバンドルし、CDN 外部読み込みは行わない（CSP を `'self'` 中心に厳格化するため）。
 
 | ライブラリ | バージョン | 用途 |
 |---|---|---|
-| vue | ^3.5.0 | UI フレームワーク |
-| vue-router | ^4.5.0 | SPA ルーティング |
-| chart.js | ^4.4.1 | 水深・水温グラフ |
+| vue | ^3.5 | UI フレームワーク |
+| vue-router | ^4.5 | SPA ルーティング |
+| chart.js | ^4.4 | 水深・水温グラフ |
+| bootstrap | ^5.3 | CSS フレームワーク |
+| bootstrap-icons | ^1.11 | アイコン |
+| leaflet | ^1.9 | 地図表示 |
+| leaflet.heat | ^0.2 | ヒートマップレイヤー |
+
+初期読み込みで `frontend/src/main.js` にすべて `import` され、Vite がバンドルする。Leaflet は `window.L` にも代入し、既存コンポーネント（`HomeView.vue` / `DetailView.vue`）の `window.L.*` 参照を維持する。
 
 ---
 
@@ -178,11 +176,12 @@ npm でインストールしているライブラリ:
 - **タイミング攻撃対策**: ログイン時、ユーザー不在の場合もダミーハッシュに対して `check_password_hash` を実行し、応答時間からのユーザー存在判定を防止
 - **自動ログアウト**: フロントエンドで `mousedown` / `keydown` / `scroll` / `touchstart` イベントを監視し、10分間無操作で自動ログアウト。ログアウト時は `/api/logout` でサーバー側トークンも削除
 - **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
-- **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定しても無視され警告ログを出して認証必須として振る舞う（多層防御）
+- **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定した場合は **サーバー起動時に `RuntimeError` を携出して起動を失敗**させる（サイレントにバイパスさせない fail-start）
+- **リソースオーナースコープによる認可**: 認証成功時に `flask.g.current_email` にログインユーザーの email を保持し、`/api/dives*` の全 API から `owner_email` としてデータ層に伝携する。Cosmos DB 側では `WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner` でクエリし、他ユーザーのドキュメントは読み取り・更新ともに不可となる（IDOR 防止）。Functions の Change Feed 処理でも `zxu_uploads` の `owner_email` を `dives` ドキュメントにコピーしてエンドツーエンドでオーナーを呈証する
 
 ### アプリケーションセキュリティ
 
-- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`（IP 単位） + `10/分`（メールアドレス単位の二重制限、複数 IP からの分散ブルートフォース対策）、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分` を設定。`/health` は除外。マルチレプリカ環境では `RATELIMIT_STORAGE_URI` で Redis 等の共有ストレージに切り替え可能
+- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`（IP 単位） + `10/分`（メールアドレス単位の二重制限、複数 IP からの分散ブルートフォース対策）、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分`、`/api/dives/uploads/<id>` = `60/分`、`/api/dives/uploads/<id>/decision` = `30/分` を設定。`/health` は除外。本番は Azure Cache for Redis (Basic C0) を `RATELIMIT_STORAGE_URI=rediss://...` で付させ、マルチレプリカで状態を共有する（Bicep で自動設定。キーは Container App secret として `listKeys` で取得し secretRef で注入）。`memory://` フォールバック時は `FLASK_DEBUG≠true` で警告ログを出す
 - **リバースプロキシ対策**: `werkzeug.middleware.proxy_fix.ProxyFix` で Container Apps からの `X-Forwarded-*` ヘッダーを信頼（`TRUST_PROXY_HOPS=1`）。クライアント IP の偽装を防ぎつつレート制限を正しく適用
 - **オープンリダイレクト対策**: ログイン後のリダイレクト先は `redirect.startsWith('/') && !redirect.startsWith('//')` で検証
 - **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを明示。**未設定時は CORS を一切許可しない（フェイルクローズ）** という設計。`supports_credentials=False`、`allow_headers` は `Authorization` / `Content-Type` のみ、`methods` は `GET` / `POST` / `OPTIONS` のみ
@@ -195,13 +194,18 @@ npm でインストールしているライブラリ:
     - `X-Frame-Options: DENY`
     - `Referrer-Policy: no-referrer`
     - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
-    - `Content-Security-Policy`: `self` + 必要な CDN（`unpkg.com` = Leaflet, `cdn.jsdelivr.net` = Bootstrap CSS / Bootstrap Icons フォント）/ タイル (`tile.openstreetmap.org`) / API オリジン（デプロイ毎の Container Apps URL） / Application Insights エンドポイントのみ許可。リポジトリ上は `__BACKEND_ORIGIN__` プレースホルダとして保持され、フロントエンドビルド時に `frontend/scripts/process-swa-config.mjs` が `VITE_API_BASE_URL` の `URL.origin` で置換し、`dist/staticwebapp.config.json` を出力する（デプロイごとにバックエンドオリジンをスコープを最小化）
+    - `Content-Security-Policy`: 「**原則 `'self'` のみ**」という厳格ポリシー。CDN は使わず Bootstrap / Leaflet / leaflet.heat はすべて npm でバンドルする。許可される外部オリジンは以下のみ（`frontend/staticwebapp.config.json`）:
+        - `img-src`: `'self' data: https://*.tile.openstreetmap.org`（OSM タイル）
+        - `connect-src`: `'self' __BACKEND_ORIGIN__ __APPINSIGHTS_INGESTION_ORIGIN__`。ビルド時に `frontend/scripts/process-swa-config.mjs` が `VITE_API_BASE_URL` と `VITE_APPINSIGHTS_CONNECTION_STRING` の `IngestionEndpoint` を抽出して `URL.origin` で置換する（デプロイ毎にスコープを最小化）
+        - `style-src`: `'self' 'unsafe-inline'`（Bootstrap 互換のため inline style を許可）
+        - `script-src`: `'self'` のみ
 - **不要な SWA ルーティング削除**: 以前 `staticwebapp.config.json` にあった `/api/*` 匿名アクセスルートは、API を Container Apps に離す以上不要（ローカルの Vite プロキシ、本番は `VITE_API_BASE_URL` で直接参照）のため削除
 - **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn の `--forwarded-allow-ips` は環境変数 `FORWARDED_ALLOW_IPS`（デフォルト `*`）経由で指定し、Container Apps Envoy フロントと整合（厳密にサイドカーの CIDR に絞りたい場合はこの env で上書き可能）
 - **ヒートマップ集計キャッシュ**: `/api/dives` の ヒートマップ / マーカー集計は全件スキャンを伴うため、認証済みリクエスト限定でプロセス内メモリにキャッシュ（TTL: `HEATMAP_CACHE_TTL_SECONDS`, デフォルト 60 秒）。連発リクエストによるスキャン負荷を抑制し、認証済み使い回しトークンでのコストストラングを緩和
 
 ### ネットワークセキュリティ
 
+- **Functions 公開面のロックダウン**: この Function App は HTTP トリガーを持たず Cosmos Change Feed のみトリガしてるため、`siteConfig.ipSecurityRestrictionsDefaultAction: 'Deny'` でメインサイトを全拒否している。SCM (Kudu) は `scmIpSecurityRestrictionsUseMain: false` + `Allow` で GitHub Actions からのデプロイに使えるよう残している。さらに厳しくしたい場合は `publicNetworkAccess: 'Disabled'` と VNet 内セルフホストランナーへ移行する
 - **VNet (10.0.0.0/16)**: 3 つのサブネットで構成
   - `container-apps-subnet` (10.0.0.0/23) — Container Apps 環境統合 (Microsoft.App/environments 委任)
   - `function-app-subnet` (10.0.3.0/24) — Function App VNet 統合 (Microsoft.App/environments 委任、Flex Consumption は CA と同じ委任種別)
@@ -215,7 +219,8 @@ npm でインストールしているライブラリ:
 - Cosmos DB / Storage へのアクセスはすべてマネージド ID による Entra ID 認証を使用し、キーやシークレットは不要
 - `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID のクライアント ID を指定し、`DefaultAzureCredential` が適切な ID を選択
 - 認証用の管理者パスワードは **環境変数に置かず**、`scripts/seed_user.py` で Cosmos DB の `users` コンテナへ直接ハッシュ化保存する運用
-- `SECRET_KEY` はローカルフォールバック認証用のみで、Cosmos DB 利用時は使用しない（Container App secrets に保存）
+- `SECRET_KEY` はローカルフォールバック認証用のみで、Cosmos DB 利用時は完全に不要（Cosmos の tokens コンテナにランダム生成トークンを SHA-256 ハッシュ保存するため）。トークンコンテナの `defaultTtl` と Container App の `TOKEN_TTL_SECONDS` env、app.py 側の署名トークン TTL を 600 秒で統一
+- `RATELIMIT_STORAGE_URI` は Bicep で Redis の `listKeys` 経由で生成し、Container App の secret として注入する（環境変数に生キーは探せない）
 - Key Vault は使用していない（必要が生じた時点で導入）
 
 ---
@@ -246,6 +251,7 @@ main ブランチへの push で自動デプロイが実行されます。Azure 
 | `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID |
 | `SWA_DEPLOYMENT_TOKEN` | Static Web Apps のデプロイトークン |
 | `VITE_API_BASE_URL` | フロントから呼ぶバックエンド URL（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）。Vite ビルド時にバンドルへ埋め込まれる |
+| `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。`process-swa-config.mjs` が IngestionEndpoint を抽出して CSP `connect-src` に動的許可 |
 
 ### Functions デプロイの注意点（Flex Consumption）
 

@@ -5,6 +5,9 @@ flask-limiter
 python-dotenv
 gunicorn
 
+# レート制限の共有ストア（flask-limiter が Redis URI から自動使用）
+redis
+
 # セキュリティ
 defusedxml
 

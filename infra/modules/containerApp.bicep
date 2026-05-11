@@ -43,6 +43,18 @@ param secretKey string = ''
 @description('Application Insights 接続文字列（省略時は App Insights 送信なし）')
 param appInsightsConnectionString string = ''
 
+@description('Redis ホスト名（レート制限共有ストア用）')
+param redisHostName string = ''
+
+@description('Redis SSL ポート')
+param redisSslPort int = 6380
+
+@description('Redis リソース ID（listKeys 取得用）')
+param redisResourceId string = ''
+
+@description('トークン TTL（秒）。Cosmos tokens コンテナの defaultTtl と一致させる。')
+param tokenTtlSeconds int = 600
+
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -74,12 +86,20 @@ var baseEnv = [
   { name: 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER', value: cosmosLocationKnowledgeContainerName }
   { name: 'AZURE_CLIENT_ID',      value: uaMI.properties.clientId }
   { name: 'TRUST_PROXY_HOPS',     value: '1' }
+  { name: 'TOKEN_TTL_SECONDS',    value: string(tokenTtlSeconds) }
 ]
 var appInsightsEnv = !empty(appInsightsConnectionString) ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }] : []
 var secretKeyEnv = !empty(secretKey) ? [{ name: 'SECRET_KEY', secretRef: 'secret-key' }] : []
-var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv)
+var redisEnv = !empty(redisHostName) ? [{ name: 'RATELIMIT_STORAGE_URI', secretRef: 'ratelimit-storage-uri' }] : []
+var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv)
 
-var containerSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []
+// Redis primaryKey を listKeys で取得して secret に梱める
+var redisPrimaryKey = !empty(redisResourceId) ? listKeys(redisResourceId, '2024-03-01').primaryKey : ''
+var redisStorageUri = !empty(redisHostName) ? 'rediss://:${redisPrimaryKey}@${redisHostName}:${redisSslPort}/0?ssl_cert_reqs=required' : ''
+
+var baseSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []
+var redisSecrets = !empty(redisHostName) ? [{ name: 'ratelimit-storage-uri', value: redisStorageUri }] : []
+var containerSecrets = concat(baseSecrets, redisSecrets)
 
 // ③ Container App 本体
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
