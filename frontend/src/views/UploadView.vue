@@ -50,6 +50,17 @@
         </router-link>
       </div>
 
+      <div v-if="proposal" class="alert alert-info py-2 small">
+        <div class="fw-semibold mb-1">ロケーション提案</div>
+        <div>提案名: {{ proposal.proposed_location?.name }}</div>
+        <div>提案GPS: {{ proposal.proposed_location?.gps_lat }}, {{ proposal.proposed_location?.gps_lon }}</div>
+        <div class="text-muted">理由: {{ proposal.reason }}</div>
+        <div class="mt-2 d-flex gap-2">
+          <button class="btn btn-sm btn-success" :disabled="uploading" @click="decide('accept')">承認</button>
+          <button class="btn btn-sm btn-outline-secondary" :disabled="uploading" @click="decide('reject')">却下</button>
+        </div>
+      </div>
+
       <!-- 送信ボタン -->
       <button
         class="btn btn-primary w-100"
@@ -66,7 +77,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { uploadDive } from '../api/dives.js'
+import { fetchUploadStatus, submitUploadDecision, uploadDive } from '../api/dives.js'
 
 const fileInputRef  = ref(null)
 const selectedFile = ref(null)
@@ -76,6 +87,8 @@ const successMsg   = ref('')
 const registeredId = ref('')
 const wasOverwritten = ref(false)
 const isDragOver   = ref(false)
+const pendingUploadId = ref('')
+const proposal = ref(null)
 
 function triggerFileInput() {
   fileInputRef.value?.click()
@@ -96,6 +109,8 @@ function selectFile(file) {
   errorMsg.value   = ''
   successMsg.value = ''
   registeredId.value = ''
+  pendingUploadId.value = ''
+  proposal.value = null
   if (!file.name.toLowerCase().endsWith('.zxu')) {
     errorMsg.value = 'ZXU ファイルのみ対応しています。'
     selectedFile.value = null
@@ -117,6 +132,7 @@ async function doUpload() {
   successMsg.value = ''
   registeredId.value = ''
   wasOverwritten.value = false
+  proposal.value = null
   try {
     const result = await uploadDive(selectedFile.value)
     if (result.dive_id) {
@@ -126,7 +142,9 @@ async function doUpload() {
         ? `既存のダイブログを上書きしました（ID: ${result.dive_id}）`
         : `登録が完了しました（ID: ${result.dive_id}）`
     } else if (result.upload_id) {
+      pendingUploadId.value = result.upload_id
       successMsg.value = `${result.message}（受付ID: ${result.upload_id}）`
+      pollUploadStatus(result.upload_id)
     } else {
       successMsg.value = result.message || 'アップロードを受け付けました。'
     }
@@ -134,6 +152,49 @@ async function doUpload() {
     if (fileInputRef.value) fileInputRef.value.value = ''
   } catch (e) {
     errorMsg.value = e.message || '登録に失敗しました。'
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function pollUploadStatus(uploadId) {
+  try {
+    for (let i = 0; i < 15; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const status = await fetchUploadStatus(uploadId)
+      if (status.status === 'proposal_ready' && status.proposal) {
+        proposal.value = status.proposal
+        if (status.processed_dive_id) registeredId.value = status.processed_dive_id
+        successMsg.value = 'ロケーション候補を提案しました。承認または却下を選択してください。'
+        return
+      }
+      if (status.status === 'processed') {
+        if (status.processed_dive_id) {
+          registeredId.value = status.processed_dive_id
+          successMsg.value = `登録が完了しました（ID: ${status.processed_dive_id}）`
+        }
+        return
+      }
+      if (status.status === 'failed') {
+        errorMsg.value = status.message || '登録に失敗しました。'
+        return
+      }
+    }
+  } catch (e) {
+    errorMsg.value = e.message || '登録状況の取得に失敗しました。'
+  }
+}
+
+async function decide(decision) {
+  if (!pendingUploadId.value) return
+  uploading.value = true
+  try {
+    const result = await submitUploadDecision(pendingUploadId.value, decision)
+    proposal.value = null
+    if (result.processed_dive_id) registeredId.value = result.processed_dive_id
+    successMsg.value = decision === 'accept' ? '提案を承認して登録しました。' : '提案を却下して登録しました。'
+  } catch (e) {
+    errorMsg.value = e.message || '承認結果の保存に失敗しました。'
   } finally {
     uploading.value = false
   }

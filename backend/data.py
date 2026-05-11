@@ -25,6 +25,10 @@ COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
 COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
 COSMOS_TOKENS_CONTAINER = os.environ.get("COSMOS_TOKENS_CONTAINER", "tokens")
 COSMOS_ZXU_CONTAINER    = os.environ.get("COSMOS_ZXU_CONTAINER", "zxu_uploads")
+COSMOS_LOCATION_KNOWLEDGE_CONTAINER = os.environ.get(
+    "COSMOS_LOCATION_KNOWLEDGE_CONTAINER",
+    "location_knowledge",
+)
 
 # トークン有効期限（秒）: 10 分
 TOKEN_TTL_SECONDS = 10 * 60
@@ -85,6 +89,16 @@ def _get_zxu_container():
     db = client.get_database_client(COSMOS_DATABASE)
     return db.create_container_if_not_exists(
         id=COSMOS_ZXU_CONTAINER,
+        partition_key=PartitionKey(path="/id"),
+    )
+
+
+def _get_location_knowledge_container():
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_LOCATION_KNOWLEDGE_CONTAINER,
         partition_key=PartitionKey(path="/id"),
     )
 
@@ -197,6 +211,48 @@ def save_zxu_upload(zxu_text: str, filename: str) -> str:
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     })
     return upload_id
+
+
+def get_zxu_upload(upload_id: str) -> dict | None:
+    """ZXU アップロード受付データを返す。存在しない場合は None。"""
+    if not _use_cosmos():
+        return None
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    try:
+        container = _get_zxu_container()
+        return container.read_item(item=upload_id, partition_key=upload_id)
+    except CosmosResourceNotFoundError:
+        return None
+
+
+def upsert_zxu_upload(upload_doc: dict) -> None:
+    """ZXU アップロード受付データを upsert する。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    _get_zxu_container().upsert_item(upload_doc)
+
+
+def save_location_knowledge_feedback(
+    upload_id: str,
+    decision: str,
+    original_location: dict | None,
+    proposed_location: dict | None,
+    final_location: dict | None,
+) -> str:
+    """ロケーション名/GPS 提案に対する承認結果をナレッジとして保存する。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    item_id = str(uuid4())
+    _get_location_knowledge_container().create_item({
+        "id": item_id,
+        "upload_id": upload_id,
+        "decision": decision,
+        "original_location": original_location or {},
+        "proposed_location": proposed_location or {},
+        "final_location": final_location or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return item_id
 
 
 def search_dives(

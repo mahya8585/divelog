@@ -53,13 +53,16 @@ from data import (
     delete_token,
     dive_exists,
     extract_tags,
+    get_zxu_upload,
     get_token_email,
     get_user,
     load_all_dives,
     load_dive,
     save_dive,
+    save_location_knowledge_feedback,
     save_zxu_upload,
     save_token,
+    upsert_zxu_upload,
 )
 
 try:
@@ -69,6 +72,7 @@ except ImportError:
 
 # dive_id バリデーション用パターン（data._validate_dive_id と同一）
 _DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+_UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9\-]{1,128}$")
 
 app = Flask(__name__)
 
@@ -385,6 +389,88 @@ def upload_dive():
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+@app.route("/api/dives/uploads/<upload_id>", methods=["GET"])
+@require_auth
+def get_upload_status(upload_id: str):
+    if not _UPLOAD_ID_RE.fullmatch(upload_id):
+        return jsonify({"error": "Invalid upload_id"}), 400
+    if not _use_cosmos():
+        return jsonify({"error": "この環境では利用できません"}), 400
+    upload_doc = get_zxu_upload(upload_id)
+    if upload_doc is None:
+        return jsonify({"error": "Upload not found"}), 404
+    return jsonify({
+        "upload_id": upload_doc.get("id"),
+        "status": upload_doc.get("status"),
+        "message": upload_doc.get("error"),
+        "processed_dive_id": upload_doc.get("processed_dive_id"),
+        "proposal": upload_doc.get("location_proposal"),
+    })
+
+
+@app.route("/api/dives/uploads/<upload_id>/decision", methods=["POST"])
+@require_auth
+def decide_upload_location(upload_id: str):
+    if not _UPLOAD_ID_RE.fullmatch(upload_id):
+        return jsonify({"error": "Invalid upload_id"}), 400
+    if not _use_cosmos():
+        return jsonify({"error": "この環境では利用できません"}), 400
+    payload = request.get_json(silent=True) or {}
+    decision = (payload.get("decision") or "").strip().lower()
+    if decision not in ("accept", "reject"):
+        return jsonify({"error": "decision は accept または reject を指定してください"}), 400
+
+    upload_doc = get_zxu_upload(upload_id)
+    if upload_doc is None:
+        return jsonify({"error": "Upload not found"}), 404
+    if upload_doc.get("status") != "proposal_ready":
+        return jsonify({"error": "このアップロードは承認待ちではありません"}), 409
+
+    dive_id = upload_doc.get("processed_dive_id")
+    if not dive_id:
+        return jsonify({"error": "処理済みのダイブ ID が見つかりません"}), 409
+    try:
+        dive = load_dive(dive_id)
+    except FileNotFoundError:
+        return jsonify({"error": "処理済みデータが見つかりません"}), 404
+    except Exception:
+        app.logger.exception("承認処理でダイブ取得に失敗しました")
+        return jsonify({"error": "承認処理に失敗しました"}), 500
+    original_location = dict(dive.get("location") or {})
+    proposed_location = (
+        (upload_doc.get("location_proposal") or {}).get("proposed_location")
+        or {}
+    )
+
+    final_location = dict(original_location)
+    if decision == "accept" and proposed_location:
+        final_location["name"] = proposed_location.get("name")
+        final_location["gps_lat"] = proposed_location.get("gps_lat")
+        final_location["gps_lon"] = proposed_location.get("gps_lon")
+        dive["location"] = final_location
+        save_dive(dive)
+
+    save_location_knowledge_feedback(
+        upload_id=upload_id,
+        decision=decision,
+        original_location=original_location,
+        proposed_location=proposed_location,
+        final_location=final_location,
+    )
+    upload_doc["status"] = "accepted" if decision == "accept" else "rejected"
+    upload_doc["decision"] = decision
+    upload_doc["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    upload_doc["final_location"] = final_location
+    upsert_zxu_upload(upload_doc)
+
+    return jsonify({
+        "upload_id": upload_id,
+        "status": upload_doc["status"],
+        "processed_dive_id": dive_id,
+        "final_location": final_location,
+    })
 
 
 @app.route("/api/dives/<dive_id>", methods=["GET"])

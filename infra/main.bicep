@@ -67,6 +67,7 @@ module cosmos 'modules/cosmosDb.bicep' = {
     databaseName    : 'divelog'
     containerName   : 'dives'
     zxuContainerName: 'zxu_uploads'
+    locationKnowledgeContainerName: 'location_knowledge'
   }
 }
 
@@ -117,6 +118,7 @@ module backend 'modules/containerApp.bicep' = {
     cosmosEndpoint              : cosmos.outputs.endpoint
     cosmosDatabaseName          : cosmos.outputs.databaseName
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
+    cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     secretKey                   : secretKey
     appInsightsConnectionString : functions.outputs.appInsightsConnectionString
   }
@@ -135,6 +137,7 @@ module functions 'modules/functionApp.bicep' = {
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
     cosmosZxuLeasesContainerName: cosmos.outputs.zxuLeasesContainerName
     cosmosDivesContainerName    : cosmos.outputs.divesContainerName
+    cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
     functionSubnetId            : network.outputs.fnSubnetId
   }

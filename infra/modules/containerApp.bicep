@@ -33,6 +33,9 @@ param cosmosDatabaseName string = 'divelog'
 @description('ZXU 生データアップロード用コンテナ名')
 param cosmosZxuContainerName string = 'zxu_uploads'
 
+@description('ロケーション承認ナレッジ用コンテナ名')
+param cosmosLocationKnowledgeContainerName string = 'location_knowledge'
+
 @description('認証トークン署名用シークレットキー（Cosmos 未使用時のフォールバック用、通常は空でよい）')
 @secure()
 param secretKey string = ''
@@ -68,6 +71,7 @@ var baseEnv = [
   { name: 'COSMOS_ENDPOINT',      value: cosmosEndpoint }
   { name: 'COSMOS_DATABASE',      value: cosmosDatabaseName }
   { name: 'COSMOS_ZXU_CONTAINER', value: cosmosZxuContainerName }
+  { name: 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER', value: cosmosLocationKnowledgeContainerName }
   { name: 'AZURE_CLIENT_ID',      value: uaMI.properties.clientId }
   { name: 'TRUST_PROXY_HOPS',     value: '1' }
 ]

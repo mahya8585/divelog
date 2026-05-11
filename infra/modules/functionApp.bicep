@@ -16,6 +16,7 @@ param cosmosDatabaseName string
 param cosmosZxuContainerName string
 param cosmosZxuLeasesContainerName string
 param cosmosDivesContainerName string
+param cosmosLocationKnowledgeContainerName string
 param logAnalyticsWorkspaceId string
 param functionSubnetId string
 
@@ -205,6 +206,14 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'COSMOS_ZXU_LEASES_CONTAINER'
           value: cosmosZxuLeasesContainerName
+        }
+        {
+          name: 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER'
+          value: cosmosLocationKnowledgeContainerName
+        }
+        {
+          name: 'LOCATION_LLM_CONFIG_PATH'
+          value: '/home/site/wwwroot/config/location_llm_config.json'
         }
         {
           name: 'AZURE_CLIENT_ID'

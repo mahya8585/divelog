@@ -1,8 +1,11 @@
 import logging
+import json
 import os
 import re
 import sys
 import tempfile
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +43,7 @@ except ImportError:  # pragma: no cover - ローカル開発フォールバッ�
     from workflow.convert_zxu_to_json import convert_zxu_to_json
 
 app = func.FunctionApp()
+_LLM_CONFIG_CACHE: dict | None = None
 
 
 def _get_cosmos_client() -> CosmosClient:
@@ -50,7 +54,89 @@ def _get_cosmos_client() -> CosmosClient:
     return CosmosClient(endpoint, credential=DefaultAzureCredential())
 
 
-def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) -> None:
+def _get_knowledge_samples(knowledge_container, limit: int = 5) -> list[dict]:
+    query = (
+        f"SELECT TOP {int(limit)} c.final_location, c.decision "
+        "FROM c ORDER BY c.created_at DESC"
+    )
+    try:
+        return list(
+            knowledge_container.query_items(
+                query=query,
+                enable_cross_partition_query=True,
+            )
+        )
+    except Exception:
+        return []
+
+
+def _load_llm_config() -> dict:
+    global _LLM_CONFIG_CACHE
+    if _LLM_CONFIG_CACHE is not None:
+        return _LLM_CONFIG_CACHE
+    default_path = Path(__file__).resolve().parent / "config" / "location_llm_config.json"
+    config_path = Path(os.environ.get("LOCATION_LLM_CONFIG_PATH", str(default_path)))
+    with open(config_path, encoding="utf-8") as f:
+        _LLM_CONFIG_CACHE = json.load(f)
+    return _LLM_CONFIG_CACHE
+
+
+def _build_location_proposal(location: dict, knowledge_examples: list[dict]) -> dict | None:
+    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    llm_api_url = os.environ.get("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
+    try:
+        config = _load_llm_config()
+    except Exception:
+        logging.exception("LLM 設定ファイルの読み込みに失敗しました")
+        return None
+    model = config.get("model", "gpt-4.1-mini")
+    user_prompt = (config.get("user_prompt_template") or "").format(
+        location_name=(location.get("name") or ""),
+        gps_lat=location.get("gps_lat"),
+        gps_lon=location.get("gps_lon"),
+        examples_json=json.dumps(knowledge_examples, ensure_ascii=False),
+    )
+    payload = {
+        "model": model,
+        "temperature": config.get("temperature", 0),
+        "messages": [
+            {"role": "system", "content": config.get("system_prompt", "")},
+            {"role": "user", "content": user_prompt},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": config["response_schema"]["name"],
+                "strict": True,
+                "schema": config["response_schema"]["schema"],
+            },
+        },
+    }
+    req = urlrequest.Request(
+        llm_api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=30) as res:
+            response_data = json.loads(res.read().decode("utf-8"))
+        content = response_data["choices"][0]["message"]["content"]
+        proposal = json.loads(content)
+    except (urlerror.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError):
+        logging.exception("LLM によるロケーション提案の生成に失敗しました")
+        return None
+    if not isinstance(proposal, dict):
+        return None
+    return proposal
+
+
+def _process_upload_doc(upload_doc: dict, uploads_container, dives_container, knowledge_container) -> None:
     status = upload_doc.get("status")
     if status != "uploaded":
         return
@@ -77,8 +163,15 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) ->
         dive_doc["id"] = dive_id
         dives_container.upsert_item(dive_doc)
 
+        location = dict(dive_doc.get("location") or {})
+        knowledge_examples = _get_knowledge_samples(knowledge_container)
+        proposal = _build_location_proposal(location, knowledge_examples)
         upload_doc["status"] = "processed"
+        if (proposal or {}).get("needs_confirmation"):
+            upload_doc["status"] = "proposal_ready"
+            upload_doc["location_proposal"] = proposal
         upload_doc["processed_dive_id"] = dive_id
+        upload_doc["extracted_location"] = location
         upload_doc["processed_at"] = datetime.now(timezone.utc).isoformat()
         uploads_container.upsert_item(upload_doc)
     except Exception as e:
@@ -105,11 +198,16 @@ def zxu_change_feed_processor(documents: func.DocumentList) -> None:
     cosmos_database = os.environ.get("COSMOS_DATABASE", "divelog")
     dives_container_name = os.environ.get("COSMOS_CONTAINER", "dives")
     uploads_container_name = os.environ.get("COSMOS_ZXU_CONTAINER", "zxu_uploads")
+    knowledge_container_name = os.environ.get(
+        "COSMOS_LOCATION_KNOWLEDGE_CONTAINER",
+        "location_knowledge",
+    )
 
     client = _get_cosmos_client()
     db = client.get_database_client(cosmos_database)
     uploads_container = db.get_container_client(uploads_container_name)
     dives_container = db.get_container_client(dives_container_name)
+    knowledge_container = db.get_container_client(knowledge_container_name)
 
     for document in documents:
-        _process_upload_doc(dict(document), uploads_container, dives_container)
+        _process_upload_doc(dict(document), uploads_container, dives_container, knowledge_container)
