@@ -1,0 +1,7 @@
+model: gpt-4o-mini
+temperature: 0.0
+timeout_seconds: 5
+confidence_threshold: 0.6
+rag_top_k: 3
+schema_name: gps_suggestion
+strict: true

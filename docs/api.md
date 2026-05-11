@@ -256,25 +256,30 @@ Content-Type: multipart/form-data
 file=<dive.zxu>
 ```
 
+### クエリパラメータ（任意）
+
+| パラメータ | 型 | 説明 |
+|---|---|---|
+| `apply_suggestion` | boolean (`true`) | Cosmos DB 未利用モードで GPS 提案を即時適用して登録する場合に指定 |
+| `gps_override_lat` | number | 同上。提案の緯度 |
+| `gps_override_lon` | number | 同上。提案の経度 |
+
 ### レスポンス（成功）
 
-#### Cosmos DB 利用時: 202 Accepted（非同期変換）
+アップロード時に **同期で** ZXU の `LOCATION` セクションを抽出し、LLM (OpenAI / Azure OpenAI) で GPS 候補を推定します。
+GPS が未設定（`(0,0)` 含む）または提案 GPS が現在値から `GPS_DIFF_THRESHOLD_KM`（既定 25 km）以上離れている場合に提案が生成されます。
+
+#### パターン A: 提案なし — 即時登録される
+
+Cosmos DB 利用時は `202 Accepted`、未利用時は `201 Created` を返します（後段の Change Feed が `dives` へ反映）。
 
 ```json
 {
   "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
-  "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。"
+  "status": "uploaded",
+  "message": "アップロードを受け付けました。"
 }
 ```
-
-| フィールド | 型 | 説明 |
-|---|---|---|
-| `upload_id` | string | ZXU 受付データの ID（Change Feed 処理追跡用） |
-| `message` | string | 受付メッセージ |
-
-> 変換後にロケーション提案が生成された場合、`GET /api/dives/uploads/{upload_id}` で `proposal_ready` を取得し、`POST /api/dives/uploads/{upload_id}/decision` で承認/却下します。
-
-#### Cosmos DB 未利用時: 201 Created（従来の同期変換）
 
 ```json
 {
@@ -284,11 +289,45 @@ file=<dive.zxu>
 }
 ```
 
+#### パターン B: GPS 提案あり — ユーザー承認待ち
+
+Cosmos DB 利用時は `202 Accepted` (`status="pending_review"`)、未利用時は `200 OK` (`status="pending_review"`、`upload_id` なし) を返します。
+
+```json
+{
+  "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
+  "status": "pending_review",
+  "gps_suggestion": {
+    "current_lat": 0.0,
+    "current_lon": 0.0,
+    "suggested_lat": 26.636187,
+    "suggested_lon": 127.883063,
+    "confidence": 0.92,
+    "source": "llm+rag",
+    "place_canonical": "ゴリラチョップ",
+    "distance_km": null
+  },
+  "message": "GPS 提案を確認してください。"
+}
+```
+
+| `gps_suggestion` フィールド | 説明 |
+|---|---|
+| `current_lat` / `current_lon` | ZXU 中の元 GPS（未設定時 `null`） |
+| `suggested_lat` / `suggested_lon` | LLM が推定した GPS |
+| `confidence` | 0.0〜1.0、`PROMPT` 設定の閾値 (`confidence_threshold`、既定 0.6) 未満は提案にならない |
+| `source` | `"llm"` または `"llm+rag"` (`location_knowledge` コンテナをコンテキスト注入した場合) |
+| `place_canonical` | 正規化されたロケーション名 |
+| `distance_km` | 現在 GPS と提案 GPS の距離（現在 GPS が未設定なら `null`） |
+
+その後、フロントエンドはユーザに承認/却下を選択させ、Cosmos モードでは [`POST /api/dives/uploads/{upload_id}/confirm`](#post-apidivesuploadsupload_idconfirm) を呼び出します。
+Cosmos 未利用モードでは同じファイルに `apply_suggestion=true` などのクエリパラメータを付けて `/api/dives/upload` を **再送信** してください。
+
 ### エラーレスポンス
 
 | ステータス | 説明 |
 |---|---|
-| `400 Bad Request` | ファイルが添付されていない、ファイル名が空、または `.zxu` 以外のファイル |
+| `400 Bad Request` | ファイルが添付されていない、ファイル名が空、`.zxu` 以外、または `gps_override_*` が範囲外 |
 | `413 Payload Too Large` | ファイルサイズが 2 MB を超過 |
 | `429 Too Many Requests` | レート制限超過（10 回/分） |
 | `500 Internal Server Error` | 変換処理または保存処理で内部エラーが発生 |
@@ -302,12 +341,14 @@ file=<dive.zxu>
 ### 処理フロー
 
 1. アップロードされたファイルの拡張子を検証（`.zxu` のみ許可）
-2. Cosmos DB 利用時: `zxu_uploads` コンテナへ ZXU 生データを保存して 202 を返す
-3. Cosmos DB の Change Feed をトリガーに Azure Functions が実行され、`workflow/convert_zxu_to_json.py` で JSON へ変換
-4. 変換結果を `dives` コンテナへ upsert し、LLM 設定がある場合は構造化出力でロケーション提案を生成
-5. 提案がある場合は `zxu_uploads` のステータスを `proposal_ready` にして承認待ちにする
-6. `accept/reject` 送信時に最終ロケーションを確定し、`location_knowledge` コンテナへ承認結果を保存する
-7. Cosmos DB 未利用時のみ、従来通り API 内で同期変換して保存
+2. ZXU から `LOCATION.name` / `LOCATION.gps_lat,gps_lon` を **同期** で抽出
+3. `location_knowledge` コンテナを完全一致 → 部分一致で参照（RAG）
+4. ヒットがなければ OpenAI / Azure OpenAI の `chat.completions` を `response_format=json_schema` (strict) で呼び出し、緯度・経度・確信度を取得
+5. 現在 GPS が `(0,0)` または提案との距離が `GPS_DIFF_THRESHOLD_KM` (km) 以上であれば「提案あり」と判定
+6. **提案あり** ：Cosmos モードでは `zxu_uploads` に `status="pending_review"` で保存、未利用モードでは即時応答のみ
+7. **提案なし** ：Cosmos モードでは `zxu_uploads` に `status="uploaded"` で保存（Functions が後段で変換）、未利用モードでは即時 JSON 変換して保存
+8. ユーザの承認/却下後 (`/confirm`) は `status="confirmed"` に遷移し、Functions の Change Feed Trigger が `gps_override` を反映して `dives` へ書き込む
+9. `dives` 側の Change Feed Trigger が `gps_source="suggested_by_llm"` のドキュメントを検知し、`location_knowledge` コンテナへ承認結果を蓄積（dive_id でデデュープ、緯度経度は平均値で更新）
 
 > **セキュリティ**: エラー発生時のレスポンスにはスタックトレースを含めず、サニタイズされたメッセージのみ返します。詳細はサーバーログに記録されます。
 
@@ -315,40 +356,67 @@ file=<dive.zxu>
 
 ## `GET /api/dives/uploads/{upload_id}`
 
-非同期アップロードの処理状況を取得する。
+アップロード受付の処理状況を取得する。Cosmos DB 利用時のみ有効。
 
 ### レスポンス例
 
 ```json
 {
   "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
-  "status": "proposal_ready",
-  "processed_dive_id": "7072_49450_20251220100700_1",
-  "proposal": {
-    "needs_confirmation": true,
+  "status": "pending_review",
+  "processed_dive_id": null,
+  "gps_suggestion": {
+    "suggested_lat": 26.636187,
+    "suggested_lon": 127.883063,
     "confidence": 0.92,
-    "reason": "名称と座標に差分があるため確認が必要",
-    "proposed_location": {
-      "name": "沖縄本島: ゴリラチョップ",
-      "gps_lat": 26.636187,
-      "gps_lon": 127.883063
-    }
+    "source": "llm+rag",
+    "place_canonical": "ゴリラチョップ"
   }
 }
 ```
 
+`status` は `uploaded` / `pending_review` / `confirmed` / `processed` / `failed` のいずれか。
+
 ---
 
-## `POST /api/dives/uploads/{upload_id}/decision`
+## `POST /api/dives/uploads/{upload_id}/confirm`
 
-ロケーション提案の承認/却下を送信する。
+GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（未利用時は `404`）。
+`status="pending_review"` のアップロードのみ受け付ける（それ以外は `409 Conflict`）。
 
 ### リクエスト
 
 ```json
 {
-  "decision": "accept"
+  "accept": true,
+  "suggested_lat": 26.636187,
+  "suggested_lon": 127.883063
 }
 ```
 
-`decision` は `accept` または `reject`。
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `accept` | boolean | `true` で提案を採用、`false` で元の値で登録 |
+| `suggested_lat` / `suggested_lon` | number | `accept=true` の場合に必須。緯度 [-90, 90] / 経度 [-180, 180] |
+
+### レスポンス（成功: 200 OK）
+
+```json
+{
+  "upload_id": "4a23e6f5-2fc2-43af-b8aa-9dd4dcd6d09f",
+  "status": "confirmed",
+  "message": "提案を承認しました。バックグラウンドで登録します。"
+}
+```
+
+承認後の dive 反映は Functions の `zxu_change_feed_processor` が担当します。
+`accept=true` の場合は `dives` ドキュメントに `location.gps_source="suggested_by_llm"` が付与され、後段の `dive_knowledge_processor` が `location_knowledge` コンテナへ蓄積します。
+
+### エラーレスポンス
+
+| ステータス | 説明 |
+|---|---|
+| `400 Bad Request` | ボディ不正、緯度・経度が範囲外 |
+| `404 Not Found` | アップロード ID が存在しない、または Cosmos DB 未利用モード |
+| `409 Conflict` | `status` が `pending_review` 以外（既に処理済 / 失敗） |
+| `429 Too Many Requests` | レート制限超過（30 回/分） |

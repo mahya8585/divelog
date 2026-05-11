@@ -9,8 +9,8 @@
 | 方法 | 説明 |
 |---|---|
 | CLI（一括変換） | `python workflow/convert_zxu_to_json.py` で `workflow/zxu/` 以下を一括変換 |
-| Web UI（個別登録） | `/upload` ページから `.zxu` ファイルをアップロードし、Cosmos DB Change Feed 経由で非同期変換 |
-| API（個別登録） | `POST /api/dives/upload` にファイルを送信（Cosmos DB 利用時は `zxu_uploads` へ保存して 202 を返却） |
+| Web UI（個別登録） | `/upload` ページから `.zxu` ファイルをアップロードし、同期で GPS 提案を確認 → ユーザー承認後に Cosmos DB Change Feed 経由で変換 |
+| API（個別登録） | `POST /api/dives/upload` にファイルを送信。提案ありなら 202 + `gps_suggestion`、なければ即時受付して `zxu_uploads` 経由で変換 |
 
 ---
 
@@ -110,10 +110,13 @@ python workflow/convert_zxu_to_json.py
 
 ### Change Feed 連携（本番）
 
-1. `POST /api/dives/upload` で受け取った ZXU を `zxu_uploads` コンテナへ保存
-2. `zxu_uploads` の Change Feed をトリガーに Azure Functions が起動
-3. Functions 内で `convert_zxu_to_json()` を実行して `dives` コンテナへ upsert
-4. 元ドキュメントの `status` を `processed` / `failed` に更新
+1. `POST /api/dives/upload` を受け取ったバックエンド (Flask) は ZXU から `LOCATION` を **同期** 抽出し、`location_knowledge` 検索 → LLM (`backend/services/location_resolver.py`) で GPS を推定する
+2. 提案条件（現在 GPS が `(0,0)` または提案との距離が `GPS_DIFF_THRESHOLD_KM`〔既定 25 km〕以上）を満たさなければ `zxu_uploads` を `status="uploaded"` で保存、満たせば `status="pending_review"` で保存し `gps_suggestion` をレスポンスに含める
+3. `pending_review` の場合はユーザの承認/却下を `POST /api/dives/uploads/{id}/confirm` で受け取り、`status="confirmed"` に遷移（採用時は `gps_override.lat/lon` も付与）
+4. `zxu_uploads` の Change Feed をトリガーに `zxu_change_feed_processor` (Functions) が起動し、`status` が `uploaded` または `confirmed` のもののみ処理する（`pending_review` はスキップ）
+5. Functions 内で `convert_zxu_to_json()` を実行して `dives` コンテナへ upsert する。`gps_override` がある場合は `location.gps_lat/gps_lon` を上書きし `location.gps_source="suggested_by_llm"` を付与する
+6. `zxu_uploads` の `status` を `processed` / `failed` に更新する
+7. `dives` コンテナの Change Feed をトリガーに `dive_knowledge_processor` (Functions) が起動し、`gps_source=="suggested_by_llm"` のドキュメントを `location_knowledge` コンテナへ蓄積する（id = 正規化ロケーション名、サンプルを追記し緯度・経度は平均で更新）
 
 ### 依存ライブラリ
 

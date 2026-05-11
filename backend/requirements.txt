@@ -11,6 +11,10 @@ redis
 # セキュリティ
 defusedxml
 
+# LLM クライアント（ロケーション GPS 推定）
+openai>=1.40
+pyyaml
+
 # Azure Cosmos DB（オプション: JSON フォールバックを使う場合は不要）
 azure-cosmos
 azure-identity

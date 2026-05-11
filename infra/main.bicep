@@ -37,6 +37,26 @@ param staticWebAppLocation string = 'eastasia'
 @secure()
 param secretKey string = ''
 
+@description('LLM プロバイダー（openai | azure_openai）')
+param llmProvider string = 'openai'
+
+@description('OpenAI API Key')
+@secure()
+param openaiApiKey string = ''
+
+@description('Azure OpenAI Endpoint')
+param azureOpenaiEndpoint string = ''
+
+@description('Azure OpenAI API Key')
+@secure()
+param azureOpenaiApiKey string = ''
+
+@description('Azure OpenAI Deployment')
+param azureOpenaiDeployment string = ''
+
+@description('Azure OpenAI API Version')
+param azureOpenaiApiVersion string = '2024-10-21'
+
 // ── 変数 ───────────────────────────────────────────────────
 var acrName     = replace('acr${appName}', '-', '')
 var vnetName    = 'vnet-${appName}'
@@ -135,6 +155,12 @@ module backend 'modules/containerApp.bicep' = {
     redisSslPort                : redis.outputs.sslPort
     redisResourceId             : redis.outputs.resourceId
     tokenTtlSeconds             : 600
+    llmProvider                 : llmProvider
+    openaiApiKey                : openaiApiKey
+    azureOpenaiEndpoint         : azureOpenaiEndpoint
+    azureOpenaiApiKey           : azureOpenaiApiKey
+    azureOpenaiDeployment       : azureOpenaiDeployment
+    azureOpenaiApiVersion       : azureOpenaiApiVersion
   }
 }
 
@@ -151,6 +177,7 @@ module functions 'modules/functionApp.bicep' = {
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
     cosmosZxuLeasesContainerName: cosmos.outputs.zxuLeasesContainerName
     cosmosDivesContainerName    : cosmos.outputs.divesContainerName
+    cosmosDivesLeasesContainerName: cosmos.outputs.divesLeasesContainerName
     cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
     functionSubnetId            : network.outputs.fnSubnetId

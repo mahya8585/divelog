@@ -35,14 +35,24 @@ export async function fetchDives(params = {}) {
 }
 
 /**
- * ZXU ファイルをアップロードしてダイブを登録する
+ * ZXU ファイルをアップロードしてダイブを登録する。
+ * GPS 提案がある場合は gps_suggestion / status:'pending_review' が返る。
+ * Cosmos 無効モードで提案を適用したい場合は apply_suggestion / gps_override_lat / gps_override_lon を指定して再送信する。
  * @param {File} file - .zxu ファイル
- * @returns {Promise<{dive_id?: string, upload_id?: string, message: string}>}
+ * @param {Object} [opts]
+ * @param {boolean} [opts.applySuggestion]
+ * @param {number} [opts.gpsOverrideLat]
+ * @param {number} [opts.gpsOverrideLon]
+ * @returns {Promise<{dive_id?: string, upload_id?: string, status?: string, gps_suggestion?: object, message: string}>}
  */
-export async function uploadDive(file) {
+export async function uploadDive(file, opts = {}) {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await apiFetch(`${BASE_URL}/api/dives/upload`, {
+  const url = new URL(`${BASE_URL}/api/dives/upload`, window.location.origin)
+  if (opts.applySuggestion) url.searchParams.set('apply_suggestion', 'true')
+  if (opts.gpsOverrideLat != null) url.searchParams.set('gps_override_lat', String(opts.gpsOverrideLat))
+  if (opts.gpsOverrideLon != null) url.searchParams.set('gps_override_lon', String(opts.gpsOverrideLon))
+  const res = await apiFetch(url.toString().replace(window.location.origin, ''), {
     method: 'POST',
     body: formData,
   })
@@ -58,11 +68,22 @@ export async function fetchUploadStatus(uploadId) {
   return data
 }
 
-export async function submitUploadDecision(uploadId, decision) {
-  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}/decision`, {
+/**
+ * GPS 提案の承認 / 却下をサーバーに送る。
+ * @param {string} uploadId
+ * @param {Object} payload
+ * @param {boolean} payload.accept - trueで提案を適用、falseで却下しそのまま登録。
+ * @param {number} [payload.suggestedLat]
+ * @param {number} [payload.suggestedLon]
+ */
+export async function confirmUpload(uploadId, { accept, suggestedLat, suggestedLon }) {
+  const body = { accept: !!accept }
+  if (suggestedLat != null) body.suggested_lat = suggestedLat
+  if (suggestedLon != null) body.suggested_lon = suggestedLon
+  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision }),
+    body: JSON.stringify(body),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
