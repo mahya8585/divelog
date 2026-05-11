@@ -89,6 +89,8 @@ const wasOverwritten = ref(false)
 const isDragOver   = ref(false)
 const pendingUploadId = ref('')
 const proposal = ref(null)
+const MAX_POLLING_ATTEMPTS = 15
+const POLLING_INTERVAL_MS = 2000
 
 function triggerFileInput() {
   fileInputRef.value?.click()
@@ -159,8 +161,8 @@ async function doUpload() {
 
 async function pollUploadStatus(uploadId) {
   try {
-    for (let i = 0; i < 15; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+    for (let i = 0; i < MAX_POLLING_ATTEMPTS; i += 1) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, POLLING_INTERVAL_MS))
       const status = await fetchUploadStatus(uploadId)
       if (status.status === 'proposal_ready' && status.proposal) {
         proposal.value = status.proposal
@@ -192,7 +194,9 @@ async function decide(decision) {
     const result = await submitUploadDecision(pendingUploadId.value, decision)
     proposal.value = null
     if (result.processed_dive_id) registeredId.value = result.processed_dive_id
-    successMsg.value = decision === 'accept' ? '提案を承認して登録しました。' : '提案を却下して登録しました。'
+    successMsg.value = decision === 'accept'
+      ? '提案を承認して登録しました。'
+      : '提案を却下し、元の情報で登録しました。'
   } catch (e) {
     errorMsg.value = e.message || '承認結果の保存に失敗しました。'
   } finally {

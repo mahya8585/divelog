@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from collections import Counter
 from functools import wraps
 from pathlib import Path
@@ -461,7 +462,7 @@ def decide_upload_location(upload_id: str):
     )
     upload_doc["status"] = "accepted" if decision == "accept" else "rejected"
     upload_doc["decision"] = decision
-    upload_doc["decided_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    upload_doc["decided_at"] = datetime.now(timezone.utc).isoformat()
     upload_doc["final_location"] = final_location
     upsert_zxu_upload(upload_doc)
 
