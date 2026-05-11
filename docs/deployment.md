@@ -141,6 +141,45 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | `VITE_API_BASE_URL` | フロントが呼ぶバックエンド URL（Vite ビルド時に埋め込まれる） | `az containerapp show -n ca-divelog -g rg-divelogsite --query "properties.configuration.ingress.fqdn" -o tsv`を `https://` 付きで設定 |
 | `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。ビルド時に `process-swa-config.mjs` が `IngestionEndpoint=` を抽出し、CSP `connect-src` に `__APPINSIGHTS_INGESTION_ORIGIN__` として動的許可。未設定の場合はテレメトリ送信が CSP で遮断される点に注意 | Application Insights リソースの「接続文字列」をそのまま設定 |
 
+#### GPS 提案 LLM 用の GitHub Secrets / Variables
+
+`deploy-backend.yml` の `Update LLM secrets and env on Container App` ステップが、以下を `ca-divelog` の env / secrets として反映します（Bicep を再実行せずに切替可能）。
+
+**Secrets** (Settings → Secrets and variables → Actions → Secrets)
+
+| Secret 名 | 必須条件 | 説明 |
+|---|---|---|
+| `OPENAI_API_KEY` | `LLM_PROVIDER=openai` のとき必須 | OpenAI API キー (`sk-...`)。Container App secret `openai-api-key` に保存される |
+| `AZURE_OPENAI_API_KEY` | `LLM_PROVIDER=azure_openai` で **API キー認証** のときのみ必要 | Managed Identity 認証を使う場合は **設定しない** |
+
+**Variables** (Settings → Secrets and variables → Actions → Variables)
+
+| Variable 名 | 推奨値 / 例 | 説明 |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` または `azure_openai` | プロバイダー切替。未設定時は既定 `openai` |
+| `AZURE_OPENAI_ENDPOINT` | `https://maaya-lab.cognitiveservices.azure.com/` | `LLM_PROVIDER=azure_openai` のときに必須。AOAI / Foundry リソースの URL |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` / `gpt-4o-mini` 等 | デプロイメント名（モデル名ではない）。Structured Outputs strict 対応モデルを指定 |
+| `AZURE_OPENAI_API_VERSION` | `2024-10-21` | 任意。`response_format=json_schema, strict=true` 対応の GA 版以降 |
+| `GPS_DIFF_THRESHOLD_KM` | `25` | 任意。提案 GPS と現 GPS の距離しきい値 (km)。狭めて提案頻度を上げるなら `5`〜`10` |
+
+**Managed Identity (推奨, API キー禁止ポリシー下で必須)**:
+
+Azure ポリシーで Cognitive Services / Foundry リソースの `disableLocalAuth=true` が強制されている場合、API キーは使えません。`AZURE_OPENAI_API_KEY` を設定しないと、バックエンドが自動で `DefaultAzureCredential` + `AZURE_CLIENT_ID`（Container App の UAMI `ca-divelog-id`）で Entra ID Bearer Token を取得して AOAI を呼び出します。前提として:
+
+1. AOAI / Foundry アカウントのスコープに対し、UAMI `ca-divelog-id` に **`Cognitive Services OpenAI User`** ロール (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) を付与しておく
+2. GitHub Actions Variables に `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` を設定し、`LLM_PROVIDER=azure_openai` にする
+3. `AZURE_OPENAI_API_KEY` Secret は **設定しない**（設定するとそちら優先になる）
+
+ロール付与例:
+
+```powershell
+$uamiPid = az identity show -n ca-divelog-id -g rg-divelogsite --query principalId -o tsv
+$aoaiId  = az cognitiveservices account show -n <aoai-account> -g <aoai-rg> --query id -o tsv
+az role assignment create `
+  --assignee-object-id $uamiPid --assignee-principal-type ServicePrincipal `
+  --role "Cognitive Services OpenAI User" --scope $aoaiId
+```
+
 #### OIDC 認証のセットアップ
 
 バックエンドのデプロイでは Entra ID アプリ登録 + Federated Credential による OIDC 認証を使用します。
@@ -234,10 +273,24 @@ az functionapp deployment source config-zip \
 ```bash
 # 関数が読み込まれているか
 az functionapp function list -g rg-divelogsite -n func-divelog -o table
-# 期待: zxu_change_feed_processor が表示される
+# 期待: zxu_change_feed_processor と dive_knowledge_processor の 2 つが表示される
 ```
 
-環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。
+環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。また `dive_knowledge_processor` は `dives` コンテナに対する Change Feed トリガーで、Lease は `COSMOS_DIVES_LEASES_CONTAINER`（既定 `dives_leases`）を使用します。
+
+> **LLM 設定はバックエンドで保持**されます（Functions 側に LLM キーは不要）。Container Apps に以下の環境変数を secret として設定してください。
+>
+> | 環境変数 | 説明 | 例 |
+> |---|---|---|
+> | `LLM_PROVIDER` | `openai` または `azure_openai` | `openai` |
+> | `OPENAI_API_KEY` | `LLM_PROVIDER=openai` 時に必須 | `sk-...` |
+> | `AZURE_OPENAI_ENDPOINT` | `LLM_PROVIDER=azure_openai` 時に必須 | `https://xxx.openai.azure.com/` |
+> | `AZURE_OPENAI_API_KEY` | API キー認証時のみ。MI 認証なら未設定 | |
+> | `AZURE_OPENAI_DEPLOYMENT` | `LLM_PROVIDER=azure_openai` 時に必須（デプロイメント名） | `gpt-4o-mini` |
+> | `AZURE_OPENAI_API_VERSION` | 任意（既定 `2024-10-21`） | `2024-10-21` |
+> | `GPS_DIFF_THRESHOLD_KM` | 任意。提案 GPS と現 GPS の距離しきい値 (km, 既定 25) | `25` |
+>
+> これらは Bicep パラメータ `llmProvider` / `openaiApiKey` / `azureOpenai*` 経由でも設定できますが、CI で柔軟に切り替えるため `deploy-backend.yml` から GitHub Secrets/Variables 経由で上書きする運用を推奨します（前節「GPS 提案 LLM 用の GitHub Secrets / Variables」参照）。`AZURE_OPENAI_API_KEY` 未指定時はバックエンドが Container App の UAMI で Entra ID 認証を行います（要 `Cognitive Services OpenAI User` ロール）。プロンプト本体は [`backend/prompts/gps_suggestion/`](../backend/prompts/gps_suggestion/) にコミットされており、`config.yaml` の `model` / `confidence_threshold` を編集してコンテナを再デプロイすると反映されます。
 
 ---
 
@@ -253,6 +306,12 @@ az functionapp function list -g rg-divelogsite -n func-divelog -o table
 | `backendMinReplicas` | `1` | Container Apps 最小レプリカ数（`@minValue(1)`） |
 | `backendMaxReplicas` | `3` | Container Apps 最大レプリカ数 |
 | `staticWebAppLocation` | `eastasia` | Static Web Apps のリージョン |
+| `llmProvider` | `openai` | LLM プロバイダー（`openai` / `azure_openai`） |
+| `openaiApiKey` | `''` (secure) | OpenAI API Key |
+| `azureOpenaiEndpoint` | `''` | Azure OpenAI エンドポイント URL |
+| `azureOpenaiApiKey` | `''` (secure) | Azure OpenAI API Key |
+| `azureOpenaiDeployment` | `''` | Azure OpenAI デプロイメント名 |
+| `azureOpenaiApiVersion` | `2024-10-21` | Azure OpenAI API バージョン |
 
 > 旧 `secretKey` / `authEmail` / `authPassword` パラメータは廃止しました（`scripts/seed_user.py` での手動シードに移行）。
 

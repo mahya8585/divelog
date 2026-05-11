@@ -29,6 +29,9 @@ param zxuContainerName string = 'zxu_uploads'
 @description('ZXU Change Feed の Lease 用コンテナ名（Functions が利用）')
 param zxuLeasesContainerName string = 'zxu_uploads_leases'
 
+@description('dives Change Feed の Lease 用コンテナ名（Functions が utilize）')
+param divesLeasesContainerName string = 'dives_leases'
+
 @description('ロケーション提案の承認/却下ナレッジ用コンテナ名')
 param locationKnowledgeContainerName string = 'location_knowledge'
 
@@ -147,6 +150,21 @@ resource zxuLeasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
+// ── dives_leases コンテナ（dive_knowledge_processor Lease）──
+resource divesLeasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name  : divesLeasesContainerName
+  properties: {
+    resource: {
+      id          : divesLeasesContainerName
+      partitionKey: {
+        paths: ['/id']
+        kind : 'Hash'
+      }
+    }
+  }
+}
+
 // ── location_knowledge コンテナ（ロケーション承認ナレッジ）──
 resource locationKnowledgeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
   parent: cosmosDatabase
@@ -168,5 +186,6 @@ output accountName string = cosmosAccount.name
 output databaseName string = cosmosDatabase.name
 output zxuContainerName string = zxuContainer.name
 output zxuLeasesContainerName string = zxuLeasesContainer.name
+output divesLeasesContainerName string = divesLeasesContainer.name
 output divesContainerName string = cosmosContainer.name
 output locationKnowledgeContainerName string = locationKnowledgeContainer.name

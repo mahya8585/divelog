@@ -45,3 +45,64 @@ jobs:
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # GPS 提案 LLM の secrets / 環境変数を更新（Bicep を再実行せず CI から差し替え可能にする）
+      # 実行条件:
+      #   - LLM_PROVIDER=openai          → secrets.OPENAI_API_KEY が必須
+      #   - LLM_PROVIDER=azure_openai    → vars.AZURE_OPENAI_ENDPOINT が必須
+      #     ・API キー認証: secrets.AZURE_OPENAI_API_KEY を指定（任意）
+      #     ・MI 認証     : API キーを指定しない場合は Container App の UAMI で
+      #                      Azure OpenAI に対し「Cognitive Services OpenAI User」
+      #                      ロールが事前に付与されていること
+      - name: Update LLM secrets and env on Container App
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_VERSION: ${{ vars.AZURE_OPENAI_API_VERSION }}
+          GPS_DIFF_THRESHOLD_KM: ${{ vars.GPS_DIFF_THRESHOLD_KM }}
+        run: |
+          set -e
+          PROVIDER="${LLM_PROVIDER:-openai}"
+
+          if [ "$PROVIDER" = "openai" ] && [ -z "$OPENAI_API_KEY" ]; then
+            echo "LLM_PROVIDER=openai だが OPENAI_API_KEY が未設定。LLM 環境変数の更新をスキップします。"
+            exit 0
+          fi
+          if [ "$PROVIDER" = "azure_openai" ] && [ -z "$AZURE_OPENAI_ENDPOINT" ]; then
+            echo "LLM_PROVIDER=azure_openai だが AZURE_OPENAI_ENDPOINT が未設定。LLM 環境変数の更新をスキップします。"
+            exit 0
+          fi
+
+          SECRETS=()
+          ENVS=("LLM_PROVIDER=$PROVIDER")
+
+          if [ "$PROVIDER" = "openai" ]; then
+            SECRETS+=("openai-api-key=$OPENAI_API_KEY")
+            ENVS+=("OPENAI_API_KEY=secretref:openai-api-key")
+          else
+            ENVS+=("AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT")
+            [ -n "$AZURE_OPENAI_DEPLOYMENT" ] && ENVS+=("AZURE_OPENAI_DEPLOYMENT=$AZURE_OPENAI_DEPLOYMENT")
+            ENVS+=("AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-10-21}")
+            if [ -n "$AZURE_OPENAI_API_KEY" ]; then
+              SECRETS+=("azure-openai-api-key=$AZURE_OPENAI_API_KEY")
+              ENVS+=("AZURE_OPENAI_API_KEY=secretref:azure-openai-api-key")
+            else
+              echo "API キー未指定。Managed Identity (UAMI) 経由で Azure OpenAI を認証します。"
+            fi
+          fi
+
+          ENVS+=("GPS_DIFF_THRESHOLD_KM=${GPS_DIFF_THRESHOLD_KM:-25}")
+
+          if [ ${#SECRETS[@]} -gt 0 ]; then
+            az containerapp secret set \
+              --name ${{ env.CONTAINER_APP_NAME }} \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --secrets "${SECRETS[@]}"
+          fi
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --set-env-vars "${ENVS[@]}"

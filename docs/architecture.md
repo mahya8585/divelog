@@ -36,7 +36,7 @@ flowchart LR
         end
 
         REDIS["🟥 Azure Cache for Redis<br/>Basic C0 (TLS 1.2)<br/>flask-limiter ストア"]
-        COSMOS["🪐 Cosmos DB (Serverless)<br/>disableLocalAuth=true<br/>publicNetworkAccess=Disabled<br/>― dives / users<br/>― tokens (TTL 600s)<br/>― zxu_uploads / leases<br/>― location_knowledge"]
+        COSMOS["🪐 Cosmos DB (Serverless)<br/>disableLocalAuth=true<br/>publicNetworkAccess=Disabled<br/>― dives / users<br/>― tokens (TTL 600s)<br/>― zxu_uploads / zxu_uploads_leases<br/>― dives_leases<br/>― location_knowledge"]
         ST["💾 Storage Account<br/>Functions ランタイム用<br/>allowSharedKeyAccess=false"]
         DNS[("Private DNS<br/>privatelink.documents.azure.com")]
     end
@@ -102,36 +102,47 @@ sequenceDiagram
     API-->>U: 200 JSON
 ```
 
-### ZXU アップロード非同期処理 フロー
+### ZXU アップロード（同期 GPS 提案 + 非同期変換）フロー
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as ブラウザ
     participant API as Flask API
-    participant COS as Cosmos DB
-    participant FN as Azure Functions<br/>(Change Feed)
-    participant LLM as Foundry / OpenAI<br/>(Location 提案)
+    participant LLM as OpenAI / Azure OpenAI<br/>(JSON Schema strict)
+    participant COS as Cosmos DB<br/>(zxu_uploads / dives / location_knowledge)
+    participant FN1 as Functions:<br/>zxu_change_feed_processor
+    participant FN2 as Functions:<br/>dive_knowledge_processor
 
     U->>API: POST /api/dives/upload (.zxu)
-    API->>COS: zxu_uploads に owner_email 付きで保存<br/>status=pending
-    API-->>U: 202 Accepted (upload_id)
-
-    COS-->>FN: Change Feed トリガ (leases コンテナで分散制御)
-    FN->>FN: ZXU → JSON 変換 (workflow/convert_zxu_to_json.py)
-    FN->>LLM: 位置情報プロンプト<br/>(_sanitize_for_prompt 適用)
-    LLM-->>FN: 構造化レスポンス (候補)
-    FN->>COS: dives コンテナへ insert<br/>(owner_email を継承)
-    FN->>COS: zxu_uploads.status=completed
-
-    loop ポーリング (60/分)
-        U->>API: GET /api/dives/uploads/{id}
-        API->>COS: status 取得 (owner_email スコープ)
-        API-->>U: status & 候補
+    API->>API: ZXU から LOCATION 抽出 (extract_location_only)
+    API->>COS: location_knowledge を完全一致 → 部分一致で参照 (RAG)
+    alt knowledge ヒット
+        Note over API: source="knowledge", confidence=1.0
+    else
+        API->>LLM: chat.completions<br/>response_format=json_schema(strict)
+        LLM-->>API: {lat, lon, confidence, source, place_canonical}
+    end
+    API->>API: GPS_DIFF_THRESHOLD_KM (既定 25km) と比較
+    alt 提案あり (現 GPS=(0,0) or 距離超過)
+        API->>COS: zxu_uploads.upsert(status="pending_review", gps_suggestion)
+        API-->>U: 202 + {upload_id, gps_suggestion}
+        U->>API: POST /api/dives/uploads/{id}/confirm {accept, suggested_*}
+        API->>COS: zxu_uploads.update(status="confirmed", gps_override?)
+        API-->>U: 200 OK
+    else 提案なし
+        API->>COS: zxu_uploads.upsert(status="uploaded")
+        API-->>U: 202 OK
     end
 
-    U->>API: POST /api/dives/uploads/{id}/decision (30/分)
-    API->>COS: 決定を反映 (location_knowledge へ学習保存)
+    COS-->>FN1: Change Feed (status=uploaded|confirmed のみ処理)
+    FN1->>FN1: ZXU → JSON 変換 (convert_zxu_to_json)
+    FN1->>FN1: gps_override があれば location.gps_lat/lon を上書き<br/>+ gps_source="suggested_by_llm"
+    FN1->>COS: dives.upsert + zxu_uploads.status="processed"
+
+    COS-->>FN2: dives Change Feed
+    FN2->>FN2: gps_source=="suggested_by_llm" のみ通過
+    FN2->>COS: location_knowledge.upsert<br/>(id=normalized_name, samples 追記+平均で gps 更新)
 ```
 
 ---
@@ -143,7 +154,7 @@ sequenceDiagram
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
 | Azure Cache for Redis | Basic C0 (TLS 1.2 / nonSSL 無効) | flask-limiter の共有ストア（マルチレプリカでのレート制限状態共有） |
 | Azure Container Apps | Consumption (`minReplicas: 1`, VNet 統合) | Flask API ホスティング |
-| Azure Functions | Flex Consumption (FC1, Python 3.11) | Cosmos DB Change Feed で ZXU → JSON 変換 |
+| Azure Functions | Flex Consumption (FC1, Python 3.11) | Cosmos DB Change Feed: (1) `zxu_change_feed_processor` で ZXU → JSON 変換、(2) `dive_knowledge_processor` で LLM 提案承認済みの GPS を `location_knowledge` へ蓄積 |
 | Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`) | Functions ランタイム用（MI 接続） |
 | Application Insights | — | Functions のテレメトリ／ログ |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
@@ -152,10 +163,13 @@ sequenceDiagram
 | Azure Private Endpoint | — | Cosmos DB へのプライベート接続 (groupId: Sql) |
 | Azure Private DNS Zone | — | `privatelink.documents.azure.com` の名前解決 |
 | Log Analytics Workspace | PerGB2018 (30 日保持) | Container Apps / Functions / App Insights のログ収集 |
+| Azure OpenAI / Foundry (Cognitive Services `AIServices`) | Standard (`disableLocalAuth: true`) | GPS 提案 LLM のホスティング。`backend/services/location_resolver.py` から **Container Apps の UAMI** で Entra ID 認証 (`Cognitive Services OpenAI User` ロール)。Structured Outputs (`response_format=json_schema, strict=true`) 対応モデルをデプロイ |
 
-> **Note**: Key Vault は現在使用していません（マネージド ID + Container App secrets のみで構成）。
+> **Note**:
+> - Key Vault は現在使用していません（マネージド ID + Container App secrets のみで構成）。
+> - Azure OpenAI / Foundry は本ソリューションでは **`rg-divelogsite` 外の既存リソース**（例: `basicAI/maaya-lab`, swedencentral）を参照する運用です。Bicep からは作成せず、`AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` などの環境変数のみを `ca-divelog` に注入し、UAMI `ca-divelog-id` に対する `Cognitive Services OpenAI User` ロール (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) は Azure OpenAI アカウント側のスコープで個別に付与します。
 
-**リソースグループ**: `rg-divelogsite`
+**リソースグループ**: `rg-divelogsite`（Azure OpenAI / Foundry は別 RG / 別リージョン可）
 
 ---
 
@@ -166,6 +180,15 @@ divelog/
 ├── backend/                    # Flask REST API
 │   ├── app.py                  # エントリポイント・ルーティング
 │   ├── data.py                 # データアクセス層 (Cosmos DB / JSON フォールバック)
+│   ├── services/               # サービス層
+│   │   ├── location_resolver.py # LLM (OpenAI/Azure OpenAI) で GPS 推定 + RAG
+│   │   ├── gps_diff.py          # haversine + 提案判定 (GPS_DIFF_THRESHOLD_KM)
+│   │   └── location_knowledge.py# Cosmos location_knowledge コンテナアクセス
+│   ├── prompts/                # LLM プロンプトバンドル（コードと分離）
+│   │   └── gps_suggestion/
+│   │       ├── system.md / user_template.md
+│   │       ├── response_schema.json / config.yaml
+│   │       └── README.md
 │   ├── requirements.txt        # Python 依存パッケージ
 │   ├── Dockerfile              # コンテナイメージビルド定義
 │   ├── .env.example            # 環境変数サンプル
@@ -208,8 +231,10 @@ divelog/
 │   ├── json/                   # ローカル JSON ダイブログデータ
 │   └── zxu/                    # ダイコン出力ファイル (入力)
 │
-├── functions/                  # Azure Functions (Change Feed 変換)
-│   ├── function_app.py         # Python v2 エントリポイント (固定名)
+├── functions/                  # Azure Functions (Change Feed)
+│   ├── function_app.py         # Python v2 エントリポイント
+│   │                           # — zxu_change_feed_processor: status=uploaded|confirmed → dives
+│   │                           # — dive_knowledge_processor: dives → location_knowledge 蓄積
 │   ├── host.json               # extensionBundle [4.*, 5.0.0)
 │   └── requirements.txt
 │

@@ -280,6 +280,44 @@ def _parse_zdp(zdp_lines: list[str]) -> list[dict]:
 # メイン変換処理
 # ---------------------------------------------------------------------------
 
+def _extract_zar_text(content: str) -> str:
+    """ZXU テキストから ZAR ブロック内部テキストを抜き出す。見つからなければ空文字。"""
+    zar_lines: list[str] = []
+    in_zar = False
+    for line in content.splitlines():
+        if line.startswith("ZAR{"):
+            in_zar = True
+            continue
+        if in_zar and line.strip() == "}":
+            break
+        if in_zar:
+            zar_lines.append(line)
+    return "\n".join(zar_lines)
+
+
+def extract_location_only(zxu_text: str) -> dict:
+    """ZXU テキストから location 情報（name, gps_lat, gps_lon）のみを軽量抽出する。
+
+    既存の `convert_zxu_to_json` の挙動には影響しない。アップロード時の
+    同期 LLM 提案フローで使うことを想定。失敗時は値 None を返す。
+    """
+    result: dict = {"name": None, "gps_lat": None, "gps_lon": None}
+    if not zxu_text:
+        return result
+    zar_text = _extract_zar_text(zxu_text)
+    if not zar_text:
+        return result
+    try:
+        parsed = _parse_zar(zar_text)
+    except Exception:
+        return result
+    loc = (parsed or {}).get("location") or {}
+    result["name"] = loc.get("name")
+    result["gps_lat"] = loc.get("gps_lat")
+    result["gps_lon"] = loc.get("gps_lon")
+    return result
+
+
 def convert_zxu_to_json(zxu_path: Path) -> dict:
     """1 つの .zxu ファイルを解析して辞書を返す。"""
 

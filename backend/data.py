@@ -220,8 +220,18 @@ def save_dive(dive_data: dict, owner_email: str | None = None) -> str:
     return dive_id
 
 
-def save_zxu_upload(zxu_text: str, filename: str, owner_email: str | None = None) -> str:
-    """ZXU 生データを Cosmos DB に保存し、アップロード ID を返す。"""
+def save_zxu_upload(
+    zxu_text: str,
+    filename: str,
+    owner_email: str | None = None,
+    status: str = "uploaded",
+    gps_suggestion: dict | None = None,
+) -> str:
+    """ZXU 生データを Cosmos DB に保存し、アップロード ID を返す。
+
+    status: "uploaded"（提案なし）/ "pending_review"（GPS 提案あり・ユーザ確認待ち）
+    gps_suggestion: pending_review 時の提案ペイロード。
+    """
     if not _use_cosmos():
         raise RuntimeError("Cosmos DB が設定されていません")
     upload_id = str(uuid4())
@@ -230,13 +240,36 @@ def save_zxu_upload(zxu_text: str, filename: str, owner_email: str | None = None
         "id": upload_id,
         "filename": filename,
         "zxu_text": zxu_text,
-        "status": "uploaded",
+        "status": status,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }
     if owner_email:
         doc["owner_email"] = owner_email
+    if gps_suggestion is not None:
+        doc["gps_suggestion"] = gps_suggestion
     container.create_item(doc)
     return upload_id
+
+
+def update_zxu_upload(
+    upload_id: str,
+    *,
+    status: str,
+    gps_override: dict | None = None,
+    owner_email: str | None = None,
+) -> dict | None:
+    """ZXU アップロードのステータスを更新する。所有者が一致しない場合は None。"""
+    if not _use_cosmos():
+        raise RuntimeError("Cosmos DB が設定されていません")
+    upload_doc = get_zxu_upload(upload_id, owner_email=owner_email)
+    if upload_doc is None:
+        return None
+    upload_doc["status"] = status
+    if gps_override is not None:
+        upload_doc["gps_override"] = gps_override
+    upload_doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _get_zxu_container().upsert_item(upload_doc)
+    return upload_doc
 
 
 def get_zxu_upload(upload_id: str, owner_email: str | None = None) -> dict | None:

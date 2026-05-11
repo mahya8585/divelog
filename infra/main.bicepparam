@@ -28,3 +28,11 @@ param backendMaxReplicas = 3
 // â”€â”€ Static Web Apps ãƒªãƒ¼ã‚¸ãƒ§ãƒ³ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // å¯¾å¿œãƒªãƒ¼ã‚¸ãƒ§ãƒ³: eastus2, centralus, eastasia, westeurope ç­‰
 param staticWebAppLocation = 'eastasia'
+
+// „Ÿ„Ÿ GPS ’ñˆÄ LLM İ’èi”CˆÓBCI ‘¤‚Å az containerapp secret set ‚ğg‚¤ê‡‚Í–¢w’è‚Å OKj
+// param llmProvider = 'openai'           // ‚Ü‚½‚Í 'azure_openai'
+// param openaiApiKey = ''                // —á: -p openaiApiKey=$(gh secret view ...)
+// param azureOpenaiEndpoint = ''
+// param azureOpenaiApiKey = ''
+// param azureOpenaiDeployment = ''
+// param azureOpenaiApiVersion = '2024-10-21'

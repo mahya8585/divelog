@@ -55,6 +55,26 @@ param redisResourceId string = ''
 @description('トークン TTL（秒）。Cosmos tokens コンテナの defaultTtl と一致させる。')
 param tokenTtlSeconds int = 600
 
+@description('LLM プロバイダー（openai | azure_openai）')
+param llmProvider string = 'openai'
+
+@description('OpenAI API Key（LLM_PROVIDER=openai の場合に使用）')
+@secure()
+param openaiApiKey string = ''
+
+@description('Azure OpenAI Endpoint（LLM_PROVIDER=azure_openai の場合に使用）')
+param azureOpenaiEndpoint string = ''
+
+@description('Azure OpenAI API Key')
+@secure()
+param azureOpenaiApiKey string = ''
+
+@description('Azure OpenAI Deployment 名')
+param azureOpenaiDeployment string = ''
+
+@description('Azure OpenAI API バージョン')
+param azureOpenaiApiVersion string = '2024-10-21'
+
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -91,7 +111,19 @@ var baseEnv = [
 var appInsightsEnv = !empty(appInsightsConnectionString) ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }] : []
 var secretKeyEnv = !empty(secretKey) ? [{ name: 'SECRET_KEY', secretRef: 'secret-key' }] : []
 var redisEnv = !empty(redisHostName) ? [{ name: 'RATELIMIT_STORAGE_URI', secretRef: 'ratelimit-storage-uri' }] : []
-var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv)
+var llmBaseEnv = [{ name: 'LLM_PROVIDER', value: llmProvider }]
+var llmOpenaiEnv = !empty(openaiApiKey) ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : []
+// Azure OpenAI: endpoint が設定されていれば env を出力する。
+//   - API キー認証: AZURE_OPENAI_API_KEY を secretRef で注入
+//   - Managed Identity 認証: API キーは渡さず、AZURE_CLIENT_ID（baseEnv で設定済み）から
+//     DefaultAzureCredential が UAMI を解決して Azure AD トークンを取得する
+var llmAzureBaseEnv = !empty(azureOpenaiEndpoint) ? [
+  { name: 'AZURE_OPENAI_ENDPOINT',     value: azureOpenaiEndpoint }
+  { name: 'AZURE_OPENAI_DEPLOYMENT',   value: azureOpenaiDeployment }
+  { name: 'AZURE_OPENAI_API_VERSION',  value: azureOpenaiApiVersion }
+] : []
+var llmAzureKeyEnv = !empty(azureOpenaiApiKey) ? [{ name: 'AZURE_OPENAI_API_KEY', secretRef: 'azure-openai-api-key' }] : []
+var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv, llmBaseEnv, llmOpenaiEnv, llmAzureBaseEnv, llmAzureKeyEnv)
 
 // Redis primaryKey を listKeys で取得して secret に梱める
 var redisPrimaryKey = !empty(redisResourceId) ? listKeys(redisResourceId, '2024-03-01').primaryKey : ''
@@ -99,7 +131,9 @@ var redisStorageUri = !empty(redisHostName) ? 'rediss://:${redisPrimaryKey}@${re
 
 var baseSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []
 var redisSecrets = !empty(redisHostName) ? [{ name: 'ratelimit-storage-uri', value: redisStorageUri }] : []
-var containerSecrets = concat(baseSecrets, redisSecrets)
+var openaiSecrets = !empty(openaiApiKey) ? [{ name: 'openai-api-key', value: openaiApiKey }] : []
+var azureOpenaiSecrets = !empty(azureOpenaiApiKey) ? [{ name: 'azure-openai-api-key', value: azureOpenaiApiKey }] : []
+var containerSecrets = concat(baseSecrets, redisSecrets, openaiSecrets, azureOpenaiSecrets)
 
 // ③ Container App 本体
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {

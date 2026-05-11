@@ -21,7 +21,6 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
 from collections import Counter
 from functools import wraps
 from pathlib import Path
@@ -60,16 +59,27 @@ from data import (
     load_all_dives,
     load_dive,
     save_dive,
-    save_location_knowledge_feedback,
     save_zxu_upload,
     save_token,
-    upsert_zxu_upload,
+    update_zxu_upload,
 )
 
 try:
-    from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu
+    from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu, extract_location_only as _extract_location_only
 except ImportError:
     _convert_zxu = None
+    _extract_location_only = None
+
+try:
+    from services.location_resolver import resolve_gps_from_name as _resolve_gps
+except Exception:
+    _resolve_gps = None
+
+try:
+    from services.gps_diff import should_suggest as _should_suggest, is_gps_missing as _is_gps_missing
+except Exception:
+    _should_suggest = None
+    _is_gps_missing = None
 
 # dive_id バリデーション用パターン（data._validate_dive_id と同一）
 _DIVE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
@@ -373,32 +383,122 @@ def upload_dive():
     if not filename.lower().endswith(".zxu"):
         return jsonify({"error": "ZXU ファイルのみ対応しています"}), 400
 
+    # クエリ/フォームパラメータ（Cosmos 無効モードでの再 POST 用）
+    apply_suggestion = (request.values.get("apply_suggestion") or "").lower() == "true"
+    override_lat_raw = request.values.get("gps_override_lat")
+    override_lon_raw = request.values.get("gps_override_lon")
+
     tmp_path = None
     owner = _current_owner()
     try:
-        if _use_cosmos():
-            raw = uploaded_file.read()
-            if not raw:
-                return jsonify({"error": "ファイルが空です"}), 400
+        raw = uploaded_file.read()
+        if not raw:
+            return jsonify({"error": "ファイルが空です"}), 400
+        try:
+            zxu_text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return jsonify({"error": "ZXU ファイルの文字コードが不正です"}), 400
+
+        # ── ZAR から location 情報を軽量抽出 ──
+        loc_preview = {}
+        if _extract_location_only is not None:
             try:
-                zxu_text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                return jsonify({"error": "ZXU ファイルの文字コードが不正です"}), 400
+                loc_preview = _extract_location_only(zxu_text) or {}
+            except Exception:
+                app.logger.warning("extract_location_only に失敗", exc_info=True)
+                loc_preview = {}
+        loc_name = (loc_preview.get("name") or "").strip()
+        cur_lat = loc_preview.get("gps_lat")
+        cur_lon = loc_preview.get("gps_lon")
+
+        # ── LLM 提案を生成（名前があれば） ──
+        suggestion = None
+        if loc_name and _resolve_gps is not None and _should_suggest is not None:
+            try:
+                suggestion = _resolve_gps(loc_name)
+            except Exception:
+                app.logger.exception("LLM 提案の生成に失敗（無視して継続）")
+                suggestion = None
+
+        gps_suggestion_payload = None
+        if suggestion and _should_suggest is not None:
+            do_suggest, dist_km = _should_suggest(
+                cur_lat, cur_lon, suggestion["lat"], suggestion["lon"]
+            )
+            if do_suggest:
+                gps_suggestion_payload = {
+                    "current_lat": cur_lat,
+                    "current_lon": cur_lon,
+                    "suggested_lat": suggestion["lat"],
+                    "suggested_lon": suggestion["lon"],
+                    "confidence": suggestion["confidence"],
+                    "source": suggestion["source"],
+                    "place_canonical": suggestion["place_canonical"],
+                    "distance_km": dist_km,
+                }
+
+        # ── Cosmos 有効モード ──
+        if _use_cosmos():
+            if gps_suggestion_payload is not None:
+                upload_id = save_zxu_upload(
+                    zxu_text,
+                    filename,
+                    owner_email=owner,
+                    status="pending_review",
+                    gps_suggestion=gps_suggestion_payload,
+                )
+                return jsonify({
+                    "upload_id": upload_id,
+                    "status": "pending_review",
+                    "gps_suggestion": gps_suggestion_payload,
+                    "message": "GPS 候補を提案しました。確認してください。",
+                }), 202
             upload_id = save_zxu_upload(zxu_text, filename, owner_email=owner)
             return jsonify({
                 "upload_id": upload_id,
+                "status": "uploaded",
                 "message": "アップロードを受け付けました。変換完了まで数秒かかる場合があります。",
             }), 202
 
-        with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
-            tmp_path = tmp.name
-            uploaded_file.save(tmp_path)
-
+        # ── Cosmos 無効モード（同期的に変換） ──
         if _convert_zxu is None:
             app.logger.error("workflow.convert_zxu_to_json が読み込めません")
             return jsonify({"error": "サーバー設定エラーが発生しました"}), 500
 
+        # 初回 POST で提案があれば 200 + gps_suggestion を返してユーザに確認させる
+        if gps_suggestion_payload is not None and not apply_suggestion and override_lat_raw is None:
+            return jsonify({
+                "status": "pending_review",
+                "gps_suggestion": gps_suggestion_payload,
+                "message": "GPS 候補を提案しました。確認後に再アップロードしてください。",
+            }), 200
+
+        with tempfile.NamedTemporaryFile(suffix=".zxu", delete=False) as tmp:
+            tmp_path = tmp.name
+            tmp.write(raw)
+
         dive_data = _convert_zxu(Path(tmp_path))
+
+        # GPS 上書き判定
+        gps_source = "device"
+        if apply_suggestion and gps_suggestion_payload is not None:
+            dive_data.setdefault("location", {})
+            dive_data["location"]["gps_lat"] = gps_suggestion_payload["suggested_lat"]
+            dive_data["location"]["gps_lon"] = gps_suggestion_payload["suggested_lon"]
+            gps_source = "suggested_by_llm"
+        elif override_lat_raw is not None and override_lon_raw is not None:
+            try:
+                ov_lat = float(override_lat_raw)
+                ov_lon = float(override_lon_raw)
+                if -90 <= ov_lat <= 90 and -180 <= ov_lon <= 180:
+                    dive_data.setdefault("location", {})
+                    dive_data["location"]["gps_lat"] = ov_lat
+                    dive_data["location"]["gps_lon"] = ov_lon
+                    gps_source = "suggested_by_llm"
+            except (TypeError, ValueError):
+                pass
+        dive_data.setdefault("location", {})["gps_source"] = gps_source
+
         overwritten = dive_exists(dive_data.get("dive_id", ""), owner_email=owner)
         dive_id = save_dive(dive_data, owner_email=owner)
         msg = "既存のデータを上書きしました" if overwritten else "登録が完了しました"
@@ -428,73 +528,56 @@ def get_upload_status(upload_id: str):
         "status": upload_doc.get("status"),
         "message": upload_doc.get("error"),
         "processed_dive_id": upload_doc.get("processed_dive_id"),
-        "proposal": upload_doc.get("location_proposal"),
+        "gps_suggestion": upload_doc.get("gps_suggestion"),
     })
 
 
-@app.route("/api/dives/uploads/<upload_id>/decision", methods=["POST"])
+@app.route("/api/dives/uploads/<upload_id>/confirm", methods=["POST"])
 @require_auth
 @limiter.limit("30 per minute")
-def decide_upload_location(upload_id: str):
+def confirm_upload(upload_id: str):
     if not _UPLOAD_ID_RE.fullmatch(upload_id):
         return jsonify({"error": "Invalid upload_id"}), 400
     if not _use_cosmos():
-        return jsonify({"error": "この環境では利用できません"}), 400
+        return jsonify({"error": "この環境では利用できません"}), 404
+
     payload = request.get_json(silent=True) or {}
-    decision = (payload.get("decision") or "").strip().lower()
-    if decision not in ("accept", "reject"):
-        return jsonify({"error": "decision は accept または reject を指定してください"}), 400
+    accept = bool(payload.get("accept"))
 
     owner = _current_owner()
     upload_doc = get_zxu_upload(upload_id, owner_email=owner)
     if upload_doc is None:
         return jsonify({"error": "Upload not found"}), 404
-    if upload_doc.get("status") != "proposal_ready":
-        return jsonify({"error": "このアップロードは承認待ちではありません"}), 409
+    if upload_doc.get("status") != "pending_review":
+        return jsonify({"error": "この受付は既に処理されています"}), 409
 
-    dive_id = upload_doc.get("processed_dive_id")
-    if not dive_id:
-        return jsonify({"error": "処理済みのダイブ ID が見つかりません"}), 409
-    try:
-        dive = load_dive(dive_id, owner_email=owner)
-    except FileNotFoundError:
-        return jsonify({"error": "処理済みデータが見つかりません"}), 404
-    except Exception:
-        app.logger.exception("承認処理でダイブ取得に失敗しました")
-        return jsonify({"error": "承認処理に失敗しました"}), 500
-    original_location = dict(dive.get("location") or {})
-    proposed_location = (
-        (upload_doc.get("location_proposal") or {}).get("proposed_location")
-        or {}
+    gps_override = None
+    if accept:
+        sug = upload_doc.get("gps_suggestion") or {}
+        s_lat = payload.get("suggested_lat", sug.get("suggested_lat"))
+        s_lon = payload.get("suggested_lon", sug.get("suggested_lon"))
+        try:
+            f_lat = float(s_lat)
+            f_lon = float(s_lon)
+        except (TypeError, ValueError):
+            return jsonify({"error": "suggested_lat / suggested_lon が不正です"}), 400
+        if not (-90 <= f_lat <= 90 and -180 <= f_lon <= 180):
+            return jsonify({"error": "GPS 値が範囲外です"}), 400
+        gps_override = {"lat": f_lat, "lon": f_lon}
+
+    updated = update_zxu_upload(
+        upload_id,
+        status="confirmed",
+        gps_override=gps_override,
+        owner_email=owner,
     )
-
-    final_location = dict(original_location)
-    if decision == "accept" and proposed_location:
-        final_location["name"] = proposed_location.get("name")
-        final_location["gps_lat"] = proposed_location.get("gps_lat")
-        final_location["gps_lon"] = proposed_location.get("gps_lon")
-        dive["location"] = final_location
-        save_dive(dive, owner_email=owner)
-
-    save_location_knowledge_feedback(
-        upload_id=upload_id,
-        decision=decision,
-        original_location=original_location,
-        proposed_location=proposed_location,
-        final_location=final_location,
-    )
-    upload_doc["status"] = "accepted" if decision == "accept" else "rejected"
-    upload_doc["decision"] = decision
-    upload_doc["decided_at"] = datetime.now(timezone.utc).isoformat()
-    upload_doc["final_location"] = final_location
-    upsert_zxu_upload(upload_doc)
-
+    if updated is None:
+        return jsonify({"error": "更新に失敗しました"}), 404
     return jsonify({
         "upload_id": upload_id,
-        "status": upload_doc["status"],
-        "processed_dive_id": dive_id,
-        "final_location": final_location,
-    })
+        "status": "confirmed",
+        "gps_override": gps_override,
+    }), 200
 
 
 @app.route("/api/dives/<dive_id>", methods=["GET"])
