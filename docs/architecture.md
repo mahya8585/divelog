@@ -2,53 +2,136 @@
 
 ## システム構成
 
+### 全体図（コンポーネント & データフロー）
+
+```mermaid
+flowchart LR
+    User([👤 ユーザー<br/>ブラウザ])
+
+    subgraph GHA["GitHub Actions (OIDC)"]
+        WF_FE[deploy-frontend.yml]
+        WF_BE[deploy-backend.yml]
+        WF_FN[deploy-functions.yml]
+    end
+
+    subgraph Azure["Azure サブスクリプション / rg-divelogsite"]
+        SWA["🌐 Static Web Apps (Free)<br/>Vue 3 SPA<br/>+ CSP / staticwebapp.config"]
+        ACR["📦 Container Registry (Basic)"]
+        AI["📊 Application Insights"]
+        LAW["🗒️ Log Analytics"]
+
+        subgraph VNET["VNet 10.0.0.0/16"]
+            direction TB
+            subgraph SUB_CA["container-apps-subnet<br/>10.0.0.0/23"]
+                CAE["Container Apps Env<br/>(Consumption)"]
+                CA["🐍 Flask API<br/>Container App<br/>minReplicas=1<br/>UAMI / 非 root"]
+                CAE --- CA
+            end
+            subgraph SUB_FN["function-app-subnet<br/>10.0.3.0/24"]
+                FN["⚡ Azure Functions<br/>Flex Consumption<br/>Change Feed Trigger<br/>UAMI"]
+            end
+            subgraph SUB_PE["private-endpoints-subnet<br/>10.0.2.0/24"]
+                PE_COS["🔌 Private Endpoint<br/>(Cosmos / Sql)"]
+            end
+        end
+
+        REDIS["🟥 Azure Cache for Redis<br/>Basic C0 (TLS 1.2)<br/>flask-limiter ストア"]
+        COSMOS["🪐 Cosmos DB (Serverless)<br/>disableLocalAuth=true<br/>publicNetworkAccess=Disabled<br/>― dives / users<br/>― tokens (TTL 600s)<br/>― zxu_uploads / leases<br/>― location_knowledge"]
+        ST["💾 Storage Account<br/>Functions ランタイム用<br/>allowSharedKeyAccess=false"]
+        DNS[("Private DNS<br/>privatelink.documents.azure.com")]
+    end
+
+    %% フロー
+    User -- "HTTPS<br/>SPA 取得" --> SWA
+    User -- "HTTPS API<br/>VITE_API_BASE_URL" --> CA
+    User -. "テレメトリ<br/>(CSP: __APPINSIGHTS_INGESTION_ORIGIN__)" .-> AI
+
+    CA -- "rediss:// (secretRef)<br/>レート制限カウンタ" --> REDIS
+    CA -- "DefaultAzureCredential<br/>(UAMI / Entra RBAC)" --> PE_COS
+    PE_COS --> COSMOS
+    PE_COS -. 名前解決 .- DNS
+
+    FN -- "Change Feed pull" --> COSMOS
+    FN -- "MI 接続" --> ST
+    FN -- "ログ / トレース" --> AI
+    AI --> LAW
+    CA -. ログ .-> LAW
+
+    %% CI/CD
+    WF_FE -- "Vite build<br/>+ CSP 置換" --> SWA
+    WF_BE -- "az acr build<br/>+ az containerapp update" --> ACR
+    ACR -- "image pull" --> CA
+    WF_FN -- "Oryx remote build<br/>(SCM)" --> FN
+
+    classDef azure fill:#e6f0ff,stroke:#1f6feb,color:#0b3b91
+    classDef secure fill:#fff5e6,stroke:#d97706,color:#7c2d12
+    classDef store fill:#eef9ee,stroke:#16a34a,color:#14532d
+    class SWA,ACR,AI,LAW,CAE,CA,FN,REDIS,ST,DNS azure
+    class PE_COS,COSMOS store
 ```
-┌──────────────────────────────────────────────────────────┐
-│  ブラウザ                                                 │
-│  Vue 3 SPA (Azure Static Web Apps / Free)                │
-└────────────────────────┬─────────────────────────────────┘
-                         │ HTTPS (VITE_API_BASE_URL)
-┌────────────────────────▼─────────────────────────────────┐
-│  Azure VNet (10.0.0.0/16)                                │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ container-apps-subnet (10.0.0.0/23)                 │ │
-│  │  Flask REST API (Azure Container Apps / Consumption)│ │
-│  │  - VNet 統合 (workloadProfiles: Consumption)        │ │
-│  │  - minReplicas: 1 (常時1台で待機)                    │ │
-│  │  - ユーザー割り当てマネージド ID + 非 root コンテナ  │ │
-│  └─────────────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ function-app-subnet (10.0.3.0/24)                   │ │
-│  │  Azure Functions (Flex Consumption / FC1)           │ │
-│  │  - Microsoft.App/environments への subnet 委任       │ │
-│  │  - VNet 統合 + vnetRouteAllEnabled = true           │ │
-│  │  - Cosmos DB Change Feed Trigger                    │ │
-│  │  - ユーザー割り当てマネージド ID                     │ │
-│  │  - Storage は Shared Key 無効 (MI 接続)              │ │
-│  └─────────────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ private-endpoints-subnet (10.0.2.0/24)              │ │
-│  │  Private Endpoint → Cosmos DB (groupId: Sql)        │ │
-│  │  Private DNS Zone: privatelink.documents.azure.com  │ │
-│  └─────────────────────────────────────────────────────┘ │
-└──────────┬───────────────────────────────────────────────┘
-           │ Private Endpoint + Entra ID (DefaultAzureCredential)
-┌──────────▼──────────┐
-│  Azure Cosmos DB    │
-│  (Serverless/NoSQL) │
-│  ├─ dives        コンテナ │
-│  ├─ users        コンテナ │
-│  ├─ tokens       コンテナ │
-│  └─ zxu_uploads  コンテナ │
-│  disableLocalAuth   │
-│  publicNetworkAccess│
-│    = Disabled       │
-└─────────────────────┘
-           ▲
-┌──────────┴──────────┐
-│  Azure Container    │
-│  Registry (Basic)   │
-└─────────────────────┘
+
+### 認証 / 認可 フロー
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as ブラウザ (Vue SPA)
+    participant API as Flask API<br/>(Container App)
+    participant LIM as Redis<br/>(flask-limiter)
+    participant COS as Cosmos DB<br/>(users / tokens / dives)
+
+    U->>API: POST /api/login (email, password)
+    API->>LIM: INCR rate-limit (5/分 IP + 10/分 email)
+    LIM-->>API: 現在カウント
+    alt 超過
+        API-->>U: 429 Too Many Requests
+    else 通過
+        API->>COS: users コンテナから email で取得
+        COS-->>API: salted hash
+        API->>API: werkzeug check_password_hash
+        API->>API: itsdangerous で署名トークン生成
+        API->>COS: tokens コンテナへ SHA-256 ハッシュ保存<br/>(defaultTtl=600s)
+        API-->>U: Set-Cookie (HttpOnly, Secure, SameSite=Lax)
+    end
+
+    Note over U,API: 以降の API 呼び出し
+    U->>API: GET /api/dives  (Cookie)
+    API->>API: require_auth: 署名検証 + Cosmos 照合<br/>g.current_email = email
+    API->>COS: query owner_email=@email<br/>(NOT IS_DEFINED 互換 OR 条件で旧データ救済)
+    COS-->>API: ユーザー所有ダイブのみ
+    API-->>U: 200 JSON
+```
+
+### ZXU アップロード非同期処理 フロー
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as ブラウザ
+    participant API as Flask API
+    participant COS as Cosmos DB
+    participant FN as Azure Functions<br/>(Change Feed)
+    participant LLM as Foundry / OpenAI<br/>(Location 提案)
+
+    U->>API: POST /api/dives/upload (.zxu)
+    API->>COS: zxu_uploads に owner_email 付きで保存<br/>status=pending
+    API-->>U: 202 Accepted (upload_id)
+
+    COS-->>FN: Change Feed トリガ (leases コンテナで分散制御)
+    FN->>FN: ZXU → JSON 変換 (workflow/convert_zxu_to_json.py)
+    FN->>LLM: 位置情報プロンプト<br/>(_sanitize_for_prompt 適用)
+    LLM-->>FN: 構造化レスポンス (候補)
+    FN->>COS: dives コンテナへ insert<br/>(owner_email を継承)
+    FN->>COS: zxu_uploads.status=completed
+
+    loop ポーリング (60/分)
+        U->>API: GET /api/dives/uploads/{id}
+        API->>COS: status 取得 (owner_email スコープ)
+        API-->>U: status & 候補
+    end
+
+    U->>API: POST /api/dives/uploads/{id}/decision (30/分)
+    API->>COS: 決定を反映 (location_knowledge へ学習保存)
 ```
 
 ---
