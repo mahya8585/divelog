@@ -12,7 +12,45 @@
 
 ---
 
-## 2026-05-12 (後刻): GPS 情報なしの ZXU をアップロードしても GPS 提案 UI が表示されない
+## 2026-05-12 (さらに後刻): SWA 経由ログインが 405 Method Not Allowed で失敗
+
+### 日付
+
+2026-05-12
+
+### 事象
+
+本番 SWA からログイン操作を行うと、ブラウザコンソールに次のエラーが出てログインできない：
+
+```
+POST .../api/login  Failed to load resource: the server responded with a status of 405 ()
+```
+
+ブラウザの Network タブで失敗したリクエスト URL は `/api/login`（**相対パス**）になっており、ホスト名がついていない。バックエンド `ca-divelog.icybeach-d9293f60.japanwest.azurecontainerapps.io` を `curl` / `nslookup` で叩いても **DNS が解決できない** 状態だった。
+
+### 原因
+
+Container Apps の Managed Environment が（再デプロイ等で）再作成され、FQDN のサブドメイン部分が変わっていた:
+
+- 旧 FQDN（`frontend/.env.production` に commit 済み）: `ca-divelog.icybeach-d9293f60.japanwest.azurecontainerapps.io`
+- 新 FQDN（`az containerapp show` の結果）: `ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io`
+
+GitHub Actions の `deploy-frontend.yml` は `VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}` を渡す設計だが、その secret も同様に古い FQDN のまま残っていたため、Vite ビルド時に旧 URL がバンドルされていた。さらにブラウザは DNS 解決失敗時にホスト部分が抜け落ちた **相対 URL `/api/login`** をそのまま SWA に投げ、SWA の `navigationFallback` が `/index.html` への rewrite を試みた結果 POST が許可されず **405** が返っていた（fetch 実装次第で起こる、URL に予期せぬ空文字列が混入したケースの典型）。
+
+### 修正対応
+
+1. `frontend/.env.production` の `VITE_API_BASE_URL` を新 FQDN へ更新（[frontend/.env.production](../frontend/.env.production)）。
+2. `frontend/staticwebapp.config.json` の `navigationFallback.exclude` に `/api/*` を追加し、万一バンドルに `VITE_API_BASE_URL` が埋め込まれずに `/api/login` が SWA に到達しても **SPA フォールバックに乗らず 404 を返す**ようにした（多層防御。405 だと「メソッド不許可 = 認証 API がそこに存在する」と誤読しがちなため）。
+3. GitHub Actions の Repository secret `VITE_API_BASE_URL` を新 FQDN に更新する必要がある（次回 CI ビルドのため。手動運用）。
+
+### 長期修正計画とその進捗
+
+- **進行中**: フロントエンドのバックエンド URL を「ビルド時埋め込み」から「ランタイム取得」に切り替える検討。SWA `appsettings` 経由で `VITE_API_BASE_URL` を SPA に渡し、起動時に `/.auth/me` のようなエンドポイントで読み込めば、FQDN 変更時にフロント再ビルド不要にできる。
+- **未着手**: Container Apps Environment を `azd` 含めて完全に **再作成しない運用** に固める。`infra/main.bicep` の `cae-divelog` 名は固定だが、Environment の **DNS サフィックス（icybeach / proudpond の部分）は再作成のたびに変わる** ため、本質的には独自ドメイン（カスタムドメイン）を Container App に紐付けて FQDN を不変化するのが恒久策。
+
+---
+
+
 
 ### 日付
 
