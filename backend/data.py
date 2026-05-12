@@ -134,8 +134,14 @@ def _load_one_from_cosmos(dive_id: str, owner_email: str | None = None) -> dict:
 # ── JSON ファイルへ書き込む ────────────────────────────────
 
 def _validate_dive_id(dive_id: str) -> None:
-    """dive_id がファイル名として安全かバリデーションする。"""
-    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]+", dive_id):
+    """dive_id がファイル名として安全かバリデーションする。
+
+    長さ上限 128 はバックエンド (`app._DIVE_ID_RE`) および
+    Functions (`function_app._DIVE_ID_RE`) と一致させること
+    （多層防御の整合性。device 由来の DUID で巨大値を仕込まれて
+    `zxu_uploads` が常時 failed で滞留する DoS 経路を塞ぐ）。
+    """
+    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", dive_id):
         raise ValueError(f"不正な dive_id: {dive_id}")
 
 
@@ -461,6 +467,145 @@ def delete_token(token: str) -> None:
         container.delete_item(item=tid, partition_key=tid)
     except Exception:
         pass
+
+
+def load_all_location_knowledge(owner_email: str | None = None) -> list[dict]:
+    """location_knowledge コンテナから全件取得する（Cosmos DB 利用時のみ）。
+    normalized_name が定義されているエントリのみ返す（フィードバック型ドキュメントを除外）。
+    owner_email 指定時は所有者一致 or 旧データ（owner_email 未設定）のみを返す（IDOR 防止）。
+    """
+    if not _use_cosmos():
+        return []
+    try:
+        container = _get_location_knowledge_container()
+        if owner_email:
+            query = (
+                "SELECT * FROM c "
+                "WHERE IS_DEFINED(c.normalized_name) "
+                "AND (NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner)"
+            )
+            params = [{"name": "@owner", "value": owner_email}]
+            return list(container.query_items(query, parameters=params, enable_cross_partition_query=True))
+        query = "SELECT * FROM c WHERE IS_DEFINED(c.normalized_name)"
+        return list(container.query_items(query, enable_cross_partition_query=True))
+    except Exception:
+        _logger.exception("load_all_location_knowledge に失敗")
+        return []
+
+
+class LocationKnowledgePermissionError(Exception):
+    """他オーナーが既に登録した location_knowledge を上書きしようとした場合に送出。"""
+
+
+def upsert_location_knowledge_entry(
+    normalized_name: str,
+    canonical_name: str,
+    gps_lat: float,
+    gps_lon: float,
+    owner_email: str | None = None,
+) -> None:
+    """location_knowledge エントリを更新または新規作成する（Cosmos DB 利用時のみ）。
+
+    既存ドキュメントに別の `owner_email` が記録されている場合は
+    LocationKnowledgePermissionError を送出し、上書きを拒否する（IDOR 防止）。
+    """
+    if not _use_cosmos():
+        return
+    container = _get_location_knowledge_container()
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    try:
+        existing = container.read_item(item=normalized_name, partition_key=normalized_name)
+    except CosmosResourceNotFoundError:
+        existing = None
+    except Exception:
+        _logger.exception("upsert_location_knowledge_entry: read_item に失敗 norm=%s", normalized_name)
+        existing = None
+
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        existing_owner = existing.get("owner_email")
+        # 旧データ (owner_email 未設定) は現リクエスト owner で「引き取り」できる。
+        # 既に他オーナーが設定されている場合は拒否する。
+        if existing_owner and owner_email and existing_owner != owner_email:
+            raise LocationKnowledgePermissionError(
+                f"location_knowledge[{normalized_name}] は別オーナーが所有しています"
+            )
+        existing["canonical_name"] = canonical_name
+        existing["gps_lat"] = gps_lat
+        existing["gps_lon"] = gps_lon
+        existing["updated_at"] = now
+        if owner_email:
+            existing["owner_email"] = owner_email
+        container.upsert_item(existing)
+    else:
+        doc: dict = {
+            "id": normalized_name,
+            "normalized_name": normalized_name,
+            "canonical_name": canonical_name,
+            "gps_lat": gps_lat,
+            "gps_lon": gps_lon,
+            "samples": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        if owner_email:
+            doc["owner_email"] = owner_email
+        container.upsert_item(doc)
+
+
+def update_dives_gps_by_location_name(
+    location_name: str,
+    new_lat: float,
+    new_lon: float,
+    owner_email: str | None = None,
+) -> int:
+    """指定ロケーション名を持つ全ダイブの GPS を更新する。更新件数を返す。
+    Cosmos DB 利用時はクエリで対象を絞り upsert する。
+    JSON フォールバック時は workflow/json/ 以下のファイルを直接更新する。
+    """
+    count = 0
+    if _use_cosmos():
+        container = _get_container()
+        query = "SELECT * FROM c WHERE c.location.name = @name"
+        params = [{"name": "@name", "value": location_name}]
+        try:
+            items = list(container.query_items(
+                query=query,
+                parameters=params,
+                enable_cross_partition_query=True,
+            ))
+        except Exception:
+            _logger.exception("update_dives_gps_by_location_name: Cosmos クエリに失敗")
+            return 0
+        for item in items:
+            # owner_email 未設定ドキュメントは旧データ互換として更新対象に含める
+            if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
+                continue
+            loc = dict(item.get("location") or {})
+            loc["gps_lat"] = new_lat
+            loc["gps_lon"] = new_lon
+            item["location"] = loc
+            try:
+                container.upsert_item(item)
+                count += 1
+            except Exception:
+                _logger.exception("update_dives_gps_by_location_name: upsert に失敗 id=%s", item.get("id"))
+    else:
+        for path in JSON_DIR.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    dive = json.load(f)
+                loc = dive.get("location") or {}
+                if loc.get("name") == location_name:
+                    loc["gps_lat"] = new_lat
+                    loc["gps_lon"] = new_lon
+                    dive["location"] = loc
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(dive, f, ensure_ascii=False, indent=2)
+                    count += 1
+            except Exception:
+                _logger.exception("update_dives_gps_by_location_name: ファイル更新に失敗 path=%s", path)
+    return count
 
 
 def seed_user_if_needed(email: str, password: str) -> None:

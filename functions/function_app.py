@@ -117,7 +117,13 @@ def _process_upload_doc(upload_doc: dict, uploads_container, dives_container) ->
 
 
 def _update_location_knowledge(dive_doc: dict, knowledge_container) -> None:
-    """suggested_by_llm の dive が保存されたら location_knowledge に蓄積する。"""
+    """suggested_by_llm の dive が保存されたら location_knowledge に蓄積する。
+
+    オーナースコープ:
+        - dive_doc.owner_email がある場合、ナレッジドキュメントにも owner_email を埋め込む。
+        - 既存ナレッジに別オーナーの owner_email が記録されている場合は更新しない
+          （IDOR 防止 / location_knowledge 汚染防止）。
+    """
     location = dive_doc.get("location") or {}
     if location.get("gps_source") != "suggested_by_llm":
         return
@@ -132,6 +138,7 @@ def _update_location_knowledge(dive_doc: dict, knowledge_container) -> None:
         return
 
     dive_id = dive_doc.get("dive_id") or dive_doc.get("id")
+    owner_email = dive_doc.get("owner_email")
     sample = {
         "dive_id": dive_id,
         "gps_lat": float(lat),
@@ -145,6 +152,13 @@ def _update_location_knowledge(dive_doc: dict, knowledge_container) -> None:
         existing = None
 
     if existing:
+        # 別オーナーが先に登録済みなら触らない（クロスオーナー汚染防止）
+        existing_owner = existing.get("owner_email")
+        if existing_owner and owner_email and existing_owner != owner_email:
+            logging.warning(
+                "location_knowledge 更新スキップ: 別オーナー所有 norm=%s", norm
+            )
+            return
         samples = existing.get("samples") or []
         if not any((s or {}).get("dive_id") == dive_id for s in samples):
             samples.append(sample)
@@ -155,9 +169,12 @@ def _update_location_knowledge(dive_doc: dict, knowledge_container) -> None:
             existing["gps_lat"] = sum(lats) / len(lats)
             existing["gps_lon"] = sum(lons) / len(lons)
         existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # 旧データ (owner 未設定) は現 dive の owner で引き取る
+        if owner_email and not existing_owner:
+            existing["owner_email"] = owner_email
         knowledge_container.upsert_item(existing)
     else:
-        knowledge_container.upsert_item({
+        doc = {
             "id": norm,
             "normalized_name": norm,
             "canonical_name": name,
@@ -166,7 +183,10 @@ def _update_location_knowledge(dive_doc: dict, knowledge_container) -> None:
             "samples": [sample],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if owner_email:
+            doc["owner_email"] = owner_email
+        knowledge_container.upsert_item(doc)
 
 
 @app.function_name(name="zxu_change_feed_processor")
