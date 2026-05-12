@@ -57,6 +57,9 @@ param azureOpenaiDeployment string = ''
 @description('Azure OpenAI API Version')
 param azureOpenaiApiVersion string = '2024-10-21'
 
+@description('GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案する')
+param gpsDiffThresholdKm int = 25
+
 // ── 変数 ───────────────────────────────────────────────────
 var acrName     = replace('acr${appName}', '-', '')
 var vnetName    = 'vnet-${appName}'
@@ -160,6 +163,7 @@ module backend 'modules/containerApp.bicep' = {
     azureOpenaiApiKey           : azureOpenaiApiKey
     azureOpenaiDeployment       : azureOpenaiDeployment
     azureOpenaiApiVersion       : azureOpenaiApiVersion
+    gpsDiffThresholdKm          : gpsDiffThresholdKm
   }
 }
 

@@ -202,7 +202,7 @@ divelog/
 │   │   ├── composables/
 │   │   │   └── useAuth.js      # 認証状態管理・自動ログアウト
 │   │   └── views/
-│   │       ├── HomeView.vue    # ダイブ一覧・ヒートマップ・検索
+│   │   │   ├── HomeView.vue    # ダイブ一覧・ヒートマップ・検索（onBeforeUnmount で Leaflet map / heatLayer / markerLayer を明示的に破棄）
 │   │       ├── DetailView.vue  # ダイブ詳細・水深グラフ・地図
 │   │       ├── UploadView.vue  # ZXU ファイルアップロード・ダイブログ登録
 │   │       └── LoginView.vue   # ログインフォーム
@@ -283,6 +283,7 @@ divelog/
 - **トークン管理**: Cosmos DB `tokens` コンテナにランダムトークン（`secrets.token_urlsafe(32)`、保存時は SHA-256 ハッシュ化して `id` に格納）を保存。コンテナの `defaultTtl = 600`（10分）により自動削除。TTL 削除タイミングの遅延に備え `expires_at` による二重チェックを行い、期限切れを検知した場合はその場で削除
 - **タイミング攻撃対策**: ログイン時、ユーザー不在の場合もダミーハッシュに対して `check_password_hash` を実行し、応答時間からのユーザー存在判定を防止
 - **自動ログアウト**: フロントエンドで `mousedown` / `keydown` / `scroll` / `touchstart` イベントを監視し、10分間無操作で自動ログアウト。ログアウト時は `/api/logout` でサーバー側トークンも削除
+- **期限切れトークンの自動リカバリ**: Cosmos `tokens` コンテナの `defaultTtl=600` でサーバー側トークンが先に消えた場合でも、`frontend/src/api/dives.js` の `apiFetch` が `401` を検知したら `useAuth.logout()` を呼んで `sessionStorage` のトークンをクリアし、`/login` へリダイレクトする（古いトークンでの 401 ループを防ぐ）
 - **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
 - **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定した場合は **サーバー起動時に `RuntimeError` を携出して起動を失敗**させる（サイレントにバイパスさせない fail-start）
 - **リソースオーナースコープによる認可**: 認証成功時に `flask.g.current_email` にログインユーザーの email を保持し、`/api/dives*` の全 API から `owner_email` としてデータ層に伝携する。Cosmos DB 側では `WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner` でクエリし、他ユーザーのドキュメントは読み取り・更新ともに不可となる（IDOR 防止）。Functions の Change Feed 処理でも `zxu_uploads` の `owner_email` を `dives` ドキュメントにコピーしてエンドツーエンドでオーナーを呈証する

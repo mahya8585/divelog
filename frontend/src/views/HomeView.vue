@@ -89,7 +89,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchDives } from '../api/dives.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
@@ -128,6 +128,9 @@ function stars(rating) {
 }
 
 // ── Leaflet ヒートマップ ───────────────────────────────
+// コンポーネントローカルに保持し、onBeforeUnmount で必ず破棄する。
+// （モジュールスコープで保持すると、画面遷移後も window resize 等で
+//   leaflet.heat が detached canvas に描画しようとして IndexSizeError を出す）
 let leafletMap = null
 let heatLayer  = null
 let markerLayer = null
@@ -218,5 +221,23 @@ watch(() => route.query, q => {
 onMounted(async () => {
   initMap()
   await loadDives()
+})
+
+// 画面遷移時に Leaflet のリソース・イベントリスナーを完全に解放する。
+// remove() を呼ばないと window resize 等で _redraw が走り、
+// detached canvas (width=0) に対する IndexSizeError が発生する。
+onBeforeUnmount(() => {
+  if (heatLayer && leafletMap) {
+    leafletMap.removeLayer(heatLayer)
+    heatLayer = null
+  }
+  if (markerLayer && leafletMap) {
+    leafletMap.removeLayer(markerLayer)
+    markerLayer = null
+  }
+  if (leafletMap) {
+    leafletMap.remove()
+    leafletMap = null
+  }
 })
 </script>

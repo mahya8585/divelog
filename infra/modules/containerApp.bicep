@@ -76,6 +76,9 @@ param azureOpenaiDeployment string = ''
 @description('Azure OpenAI API バージョン')
 param azureOpenaiApiVersion string = '2024-10-21'
 
+@description('GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案を返す')
+param gpsDiffThresholdKm int = 25
+
 // AcrPull ロール定義 ID（固定値）
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -133,7 +136,8 @@ var llmAzureBaseEnv = !empty(azureOpenaiEndpoint) ? [
   { name: 'AZURE_OPENAI_API_VERSION',  value: azureOpenaiApiVersion }
 ] : []
 var llmAzureKeyEnv = !empty(azureOpenaiApiKey) ? [{ name: 'AZURE_OPENAI_API_KEY', secretRef: 'azure-openai-api-key' }] : []
-var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv, llmBaseEnv, llmOpenaiEnv, llmAzureBaseEnv, llmAzureKeyEnv)
+var gpsDiffEnv = [{ name: 'GPS_DIFF_THRESHOLD_KM', value: string(gpsDiffThresholdKm) }]
+var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv, llmBaseEnv, llmOpenaiEnv, llmAzureBaseEnv, llmAzureKeyEnv, gpsDiffEnv)
 
 // Redis 接続は AAD 認証のため secret 不要（listKeys 廃止）。
 var baseSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []

@@ -7,16 +7,24 @@ import { useAuth } from '../composables/useAuth.js'
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 /**
- * 認証ヘッダーを付与した fetch ラッパー
+ * 認証ヘッダーを付与した fetch ラッパー。
+ * 401 が返った場合は期限切れ / 失効トークンとみなしてログアウト処理 (token クリア + /login 遷移) を行う。
  */
 function apiFetch(url, options = {}) {
-  const { getToken } = useAuth()
+  const { getToken, logout } = useAuth()
   const token = getToken()
   const headers = {
     ...options.headers,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
-  return fetch(url, { ...options, headers })
+  return fetch(url, { ...options, headers }).then((res) => {
+    if (res.status === 401) {
+      // 期限切れトークン等。sessionStorage から token を削除しログイン画面へ。
+      // logout() は非同期に /api/logout を呼び /login へ router.push する。
+      logout()
+    }
+    return res
+  })
 }
 
 /**
