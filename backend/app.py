@@ -104,7 +104,61 @@ app.wsgi_app = ProxyFix(
 # レートリミッター　（ブルートフォース対策 / DoS 緩和）
 # 本番では RATELIMIT_STORAGE_URI に Redis を指定し、複数レプリカ間で状態を共有する。
 # memory:// フォールバックは複数レプリカでは状態が分裂するため、本番では警告を出す。
-_RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
+#
+# Azure Cache for Redis でアクセスキー認証が無効化されている環境
+# (disableAccessKeyAuthentication=true + aad-enabled=true) では、
+# REDIS_AAD_ENABLED=true を設定するとマネージド ID (UAMI) で Entra ID 認証を行う。
+# その場合 URI にはパスワードを含めず、AZURE_REDIS_USERNAME に UAMI の principalId を渡す。
+def _build_limiter_storage():
+    uri = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
+    options: dict = {}
+    aad_enabled = os.environ.get("REDIS_AAD_ENABLED", "").lower() == "true"
+    if aad_enabled and uri.startswith(("redis://", "rediss://")):
+        try:
+            from azure.identity import DefaultAzureCredential
+            from redis.credentials import CredentialProvider
+        except Exception as exc:  # pragma: no cover - 起動時の依存チェック
+            raise RuntimeError(
+                f"REDIS_AAD_ENABLED=true ですが azure-identity / redis をインポートできません: {exc}"
+            ) from exc
+
+        username = os.environ.get("AZURE_REDIS_USERNAME")
+        if not username:
+            raise RuntimeError(
+                "REDIS_AAD_ENABLED=true ですが AZURE_REDIS_USERNAME (UAMI の principalId) が未設定です"
+            )
+
+        client_id = os.environ.get("AZURE_CLIENT_ID")
+        _credential = (
+            DefaultAzureCredential(managed_identity_client_id=client_id)
+            if client_id
+            else DefaultAzureCredential()
+        )
+
+        class _RedisEntraIdCredentialProvider(CredentialProvider):
+            """Azure Cache for Redis 用 Entra ID クレデンシャルプロバイダ。
+
+            redis-py は接続を確立するたびに get_credentials() を呼び出し、
+            返ってきた (username, password) で AUTH を発行する。
+            DefaultAzureCredential は内部でトークンキャッシュを持つため、
+            毎回 IMDS を叩くわけではない（期限切れ時のみ再取得）。
+            """
+
+            _SCOPE = "https://redis.azure.com/.default"
+
+            def __init__(self, credential, user: str) -> None:
+                self._credential = credential
+                self._user = user
+
+            def get_credentials(self):
+                token = self._credential.get_token(self._SCOPE).token
+                return (self._user, token)
+
+        options["credential_provider"] = _RedisEntraIdCredentialProvider(_credential, username)
+    return uri, options
+
+
+_RATELIMIT_STORAGE_URI, _RATELIMIT_STORAGE_OPTIONS = _build_limiter_storage()
 if _RATELIMIT_STORAGE_URI == "memory://" and os.environ.get("FLASK_DEBUG", "").lower() != "true":
     import warnings
     warnings.warn(
@@ -117,6 +171,7 @@ limiter = Limiter(
     app=app,
     default_limits=["200 per minute"],
     storage_uri=_RATELIMIT_STORAGE_URI,
+    storage_options=_RATELIMIT_STORAGE_OPTIONS,
 )
 
 # アップロードサイズ上限 (Cosmos ドキュメント上限 2MB に合わせる)

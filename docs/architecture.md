@@ -152,7 +152,7 @@ sequenceDiagram
 | リソース | SKU | 用途 |
 |---|---|---|
 | Azure Container Registry | Basic | バックエンドコンテナイメージ管理 |
-| Azure Cache for Redis | Basic C0 (TLS 1.2 / nonSSL 無効) | flask-limiter の共有ストア（マルチレプリカでのレート制限状態共有） |
+| Azure Cache for Redis | Basic C0 (TLS 1.2 / nonSSL 無効 / `disableAccessKeyAuth=true` / `aad-enabled=true`) | flask-limiter の共有ストア（UAMI による Entra ID 認証、`Data Contributor` アクセスポリシー） |
 | Azure Container Apps | Consumption (`minReplicas: 1`, VNet 統合) | Flask API ホスティング |
 | Azure Functions | Flex Consumption (FC1, Python 3.11) | Cosmos DB Change Feed: (1) `zxu_change_feed_processor` で ZXU → JSON 変換、(2) `dive_knowledge_processor` で LLM 提案承認済みの GPS を `location_knowledge` へ蓄積 |
 | Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`) | Functions ランタイム用（MI 接続） |
@@ -289,7 +289,7 @@ divelog/
 
 ### アプリケーションセキュリティ
 
-- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`（IP 単位） + `10/分`（メールアドレス単位の二重制限、複数 IP からの分散ブルートフォース対策）、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分`、`/api/dives/uploads/<id>` = `60/分`、`/api/dives/uploads/<id>/decision` = `30/分` を設定。`/health` は除外。本番は Azure Cache for Redis (Basic C0) を `RATELIMIT_STORAGE_URI=rediss://...` で付させ、マルチレプリカで状態を共有する（Bicep で自動設定。キーは Container App secret として `listKeys` で取得し secretRef で注入）。`memory://` フォールバック時は `FLASK_DEBUG≠true` で警告ログを出す
+- **レート制限**: `flask-limiter` で全体に `200/分` のデフォルト制限を適用。エンドポイント別に `/api/login` = `5/分`（IP 単位） + `10/分`（メールアドレス単位の二重制限、複数 IP からの分散ブルートフォース対策）、`/api/dives/upload` = `10/分`、`/api/dives` = `60/分`、`/api/dives/uploads/<id>` = `60/分`、`/api/dives/uploads/<id>/decision` = `30/分` を設定。`/health` は除外。本番は Azure Cache for Redis (Basic C0, `disableAccessKeyAuthentication=true` + `aad-enabled=true`) を `RATELIMIT_STORAGE_URI=rediss://<host>:6380/0?ssl_cert_reqs=required` で接続し、マルチレプリカで状態を共有する。**認証は Container Apps の UAMI による Entra ID トークン** (`https://redis.azure.com/.default`) で行い、Bicep の `modules/redisAccessPolicy.bicep` で UAMI に `Data Contributor` アクセスポリシーを割り当てる。`backend/app.py` は `REDIS_AAD_ENABLED=true` + `AZURE_REDIS_USERNAME` (UAMI principalId) を読み、`redis-py` の `credential_provider` 経由でトークンを差し込む（API キーは Container App secret に保持しない）。`memory://` フォールバック時は `FLASK_DEBUG≠true` で警告ログを出す
 - **リバースプロキシ対策**: `werkzeug.middleware.proxy_fix.ProxyFix` で Container Apps からの `X-Forwarded-*` ヘッダーを信頼（`TRUST_PROXY_HOPS=1`）。クライアント IP の偽装を防ぎつつレート制限を正しく適用
 - **オープンリダイレクト対策**: ログイン後のリダイレクト先は `redirect.startsWith('/') && !redirect.startsWith('//')` で検証
 - **CORS**: `ALLOWED_ORIGINS` 環境変数で許可オリジンを明示。**未設定時は CORS を一切許可しない（フェイルクローズ）** という設計。`supports_credentials=False`、`allow_headers` は `Authorization` / `Content-Type` のみ、`methods` は `GET` / `POST` / `OPTIONS` のみ
@@ -328,7 +328,7 @@ divelog/
 - `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID のクライアント ID を指定し、`DefaultAzureCredential` が適切な ID を選択
 - 認証用の管理者パスワードは **環境変数に置かず**、`scripts/seed_user.py` で Cosmos DB の `users` コンテナへ直接ハッシュ化保存する運用
 - `SECRET_KEY` はローカルフォールバック認証用のみで、Cosmos DB 利用時は完全に不要（Cosmos の tokens コンテナにランダム生成トークンを SHA-256 ハッシュ保存するため）。トークンコンテナの `defaultTtl` と Container App の `TOKEN_TTL_SECONDS` env、app.py 側の署名トークン TTL を 600 秒で統一
-- `RATELIMIT_STORAGE_URI` は Bicep で Redis の `listKeys` 経由で生成し、Container App の secret として注入する（環境変数に生キーは探せない）
+- `RATELIMIT_STORAGE_URI` は Bicep でホスト名のみを env として直接注入する。Redis のアクセスキーは無効化（`disableAccessKeyAuthentication=true`）し、UAMI の Entra ID トークンで AUTH するため Container App の secret には何も保存しない
 - Key Vault は使用していない（必要が生じた時点で導入）
 
 ---

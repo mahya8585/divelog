@@ -91,7 +91,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `FLASK_DEBUG` | `false` | デバッグモード (`true` / `false`) |
 | `ALLOWED_ORIGINS` | (空) | CORS 許可オリジン（カンマ区切り）。**未設定時は CORS 一切不許可（フェイルクローズ）** |
 | `TRUST_PROXY_HOPS` | `1` | `ProxyFix` で信頼するプロキシのホップ数（Container Apps 経由なら `1`） |
-| `RATELIMIT_STORAGE_URI` | `memory://` | レート制限のストレージ。マルチレプリカでは `redis://...` 推奨 |
+| `RATELIMIT_STORAGE_URI` | `memory://` | レート制限のストレージ。マルチレプリカでは `rediss://<host>:6380/0?ssl_cert_reqs=required` 推奨。Azure Cache for Redis を AAD のみで使う場合は `REDIS_AAD_ENABLED=true` と `AZURE_REDIS_USERNAME=<UAMI principalId>` も併せて設定（パスワードは URI に含めない） |
 | `HEATMAP_CACHE_TTL_SECONDS` | `60` | `/api/dives` のヒートマップ/マーカー集計キャッシュの TTL 秒。キャッシュはトークン検証後に適用され、連発リクエストによるスキャン負荷を抑制する |
 | `FORWARDED_ALLOW_IPS` | `*`（Dockerfile デフォルト） | gunicorn が `X-Forwarded-*` ヘッダを信頼する送信元 IP。Container Apps の Envoy フロントとして動作させるため `*` を採用し、ProxyFix と二段階で保護 |
 | `AUTH_DISABLED` | (空) | `true` を明示設定し、**かつ `FLASK_DEBUG=true`** のときのみ認証をスキップ（ローカル開発限定、警告ログを出力） |

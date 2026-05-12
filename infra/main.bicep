@@ -153,7 +153,6 @@ module backend 'modules/containerApp.bicep' = {
     appInsightsConnectionString : functions.outputs.appInsightsConnectionString
     redisHostName               : redis.outputs.hostName
     redisSslPort                : redis.outputs.sslPort
-    redisResourceId             : redis.outputs.resourceId
     tokenTtlSeconds             : 600
     llmProvider                 : llmProvider
     openaiApiKey                : openaiApiKey
@@ -219,6 +218,18 @@ module cosmosDiagnostics 'modules/cosmosDiagnostics.bicep' = {
   params: {
     cosmosAccountName     : cosmos.outputs.accountName
     logAnalyticsWorkspaceId: caEnv.outputs.logAnalyticsWorkspaceId
+  }
+}
+
+// 12. Redis データプレーン RBAC: backend (UAMI) に Data Contributor 付与
+//     Redis 側で disableAccessKeyAuthentication=true / aad-enabled=true としているため、
+//     flask-limiter が Entra ID トークンで接続できるようアクセスポリシーを割り当てる。
+module redisBackendAccess 'modules/redisAccessPolicy.bicep' = {
+  name: 'redis-access-backend'
+  params: {
+    redisName     : redis.outputs.name
+    principalId   : backend.outputs.principalId
+    principalAlias: '${backendName}-id'
   }
 }
 
