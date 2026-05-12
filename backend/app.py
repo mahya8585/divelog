@@ -66,6 +66,7 @@ from data import (
     update_zxu_upload,
     upsert_location_knowledge_entry,
 )
+from data import LocationKnowledgePermissionError
 
 try:
     from services.location_knowledge import normalize_name as _normalize_location_name
@@ -621,16 +622,21 @@ def confirm_upload(upload_id: str):
 
     gps_override = None
     if accept:
+        # セキュリティ: クライアントから送られてきた suggested_lat/lon は採用しない。
+        # （ユーザが任意座標を `suggested_by_llm` として書き込み、`location_knowledge` を
+        #   汚染する経路を塞ぐ。承認できるのはサーバが保存した提案値のみ。）
         sug = upload_doc.get("gps_suggestion") or {}
-        s_lat = payload.get("suggested_lat", sug.get("suggested_lat"))
-        s_lon = payload.get("suggested_lon", sug.get("suggested_lon"))
+        s_lat = sug.get("suggested_lat")
+        s_lon = sug.get("suggested_lon")
+        if s_lat is None or s_lon is None:
+            return jsonify({"error": "承認可能な GPS 提案が見つかりません"}), 400
         try:
             f_lat = float(s_lat)
             f_lon = float(s_lon)
         except (TypeError, ValueError):
-            return jsonify({"error": "suggested_lat / suggested_lon が不正です"}), 400
+            return jsonify({"error": "保存された GPS 提案が不正です"}), 400
         if not (-90 <= f_lat <= 90 and -180 <= f_lon <= 180):
-            return jsonify({"error": "GPS 値が範囲外です"}), 400
+            return jsonify({"error": "保存された GPS 提案が範囲外です"}), 400
         gps_override = {"lat": f_lat, "lon": f_lon}
 
     updated = update_zxu_upload(
@@ -692,9 +698,10 @@ def get_locations():
             }
         loc_map[name]["dive_count"] += 1
 
-    # location_knowledge をマージ（正規化名で照合）
+    # location_knowledge をマージ（正規化名で照合）。
+    # owner_email スコープで自分のナレッジ + 旧データ (owner 未設定) のみを参照する（IDOR 防止）。
     knowledge_by_norm: dict[str, dict] = {}
-    for k in load_all_location_knowledge():
+    for k in load_all_location_knowledge(owner_email=owner):
         norm = k.get("normalized_name")
         if norm:
             knowledge_by_norm[norm] = k
@@ -748,7 +755,12 @@ def put_location_knowledge(norm_name: str):
         return jsonify({"error": "GPS 値が範囲外です"}), 400
 
     try:
-        upsert_location_knowledge_entry(norm_name, canonical_name, new_lat, new_lon)
+        upsert_location_knowledge_entry(
+            norm_name, canonical_name, new_lat, new_lon, owner_email=_current_owner()
+        )
+    except LocationKnowledgePermissionError:
+        # 他オーナーが先に登録済みのナレッジは上書きさせない（IDOR 防止）
+        return jsonify({"error": "このロケーションは別ユーザーが登録済みです"}), 403
     except Exception:
         app.logger.exception("location_knowledge の更新に失敗")
         return jsonify({"error": "location_knowledge の更新に失敗しました"}), 500

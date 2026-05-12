@@ -166,10 +166,22 @@ function updateMap() {
       fillColor: '#00b4d8', color: '#fff',
       weight: 2, opacity: 1, fillOpacity: 0.7,
     })
-      .bindPopup(`<strong>${m.name}</strong><br>${m.count} ダイブ`)
+      // Leaflet の bindPopup は HTML 評価。ロケーション名は ZXU device 由来でユーザ
+      // 制御できる文字列なので必ずエスケープする（CSP に依存しない多層防御）。
+      .bindPopup(`<strong>${escapeHtml(m.name)}</strong><br>${Number(m.count) || 0} ダイブ`)
       .addTo(markerLayer)
   })
   markerLayer.addTo(leafletMap)
+}
+
+function escapeHtml(s) {
+  if (s == null) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 // ── データ取得 ────────────────────────────────────────

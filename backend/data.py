@@ -134,8 +134,14 @@ def _load_one_from_cosmos(dive_id: str, owner_email: str | None = None) -> dict:
 # ── JSON ファイルへ書き込む ────────────────────────────────
 
 def _validate_dive_id(dive_id: str) -> None:
-    """dive_id がファイル名として安全かバリデーションする。"""
-    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]+", dive_id):
+    """dive_id がファイル名として安全かバリデーションする。
+
+    長さ上限 128 はバックエンド (`app._DIVE_ID_RE`) および
+    Functions (`function_app._DIVE_ID_RE`) と一致させること
+    （多層防御の整合性。device 由来の DUID で巨大値を仕込まれて
+    `zxu_uploads` が常時 failed で滞留する DoS 経路を塞ぐ）。
+    """
+    if not dive_id or not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", dive_id):
         raise ValueError(f"不正な dive_id: {dive_id}")
 
 
@@ -463,14 +469,23 @@ def delete_token(token: str) -> None:
         pass
 
 
-def load_all_location_knowledge() -> list[dict]:
+def load_all_location_knowledge(owner_email: str | None = None) -> list[dict]:
     """location_knowledge コンテナから全件取得する（Cosmos DB 利用時のみ）。
     normalized_name が定義されているエントリのみ返す（フィードバック型ドキュメントを除外）。
+    owner_email 指定時は所有者一致 or 旧データ（owner_email 未設定）のみを返す（IDOR 防止）。
     """
     if not _use_cosmos():
         return []
     try:
         container = _get_location_knowledge_container()
+        if owner_email:
+            query = (
+                "SELECT * FROM c "
+                "WHERE IS_DEFINED(c.normalized_name) "
+                "AND (NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner)"
+            )
+            params = [{"name": "@owner", "value": owner_email}]
+            return list(container.query_items(query, parameters=params, enable_cross_partition_query=True))
         query = "SELECT * FROM c WHERE IS_DEFINED(c.normalized_name)"
         return list(container.query_items(query, enable_cross_partition_query=True))
     except Exception:
@@ -478,13 +493,22 @@ def load_all_location_knowledge() -> list[dict]:
         return []
 
 
+class LocationKnowledgePermissionError(Exception):
+    """他オーナーが既に登録した location_knowledge を上書きしようとした場合に送出。"""
+
+
 def upsert_location_knowledge_entry(
     normalized_name: str,
     canonical_name: str,
     gps_lat: float,
     gps_lon: float,
+    owner_email: str | None = None,
 ) -> None:
-    """location_knowledge エントリを更新または新規作成する（Cosmos DB 利用時のみ）。"""
+    """location_knowledge エントリを更新または新規作成する（Cosmos DB 利用時のみ）。
+
+    既存ドキュメントに別の `owner_email` が記録されている場合は
+    LocationKnowledgePermissionError を送出し、上書きを拒否する（IDOR 防止）。
+    """
     if not _use_cosmos():
         return
     container = _get_location_knowledge_container()
@@ -499,13 +523,22 @@ def upsert_location_knowledge_entry(
 
     now = datetime.now(timezone.utc).isoformat()
     if existing:
+        existing_owner = existing.get("owner_email")
+        # 旧データ (owner_email 未設定) は現リクエスト owner で「引き取り」できる。
+        # 既に他オーナーが設定されている場合は拒否する。
+        if existing_owner and owner_email and existing_owner != owner_email:
+            raise LocationKnowledgePermissionError(
+                f"location_knowledge[{normalized_name}] は別オーナーが所有しています"
+            )
         existing["canonical_name"] = canonical_name
         existing["gps_lat"] = gps_lat
         existing["gps_lon"] = gps_lon
         existing["updated_at"] = now
+        if owner_email:
+            existing["owner_email"] = owner_email
         container.upsert_item(existing)
     else:
-        container.upsert_item({
+        doc: dict = {
             "id": normalized_name,
             "normalized_name": normalized_name,
             "canonical_name": canonical_name,
@@ -514,7 +547,10 @@ def upsert_location_knowledge_entry(
             "samples": [],
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        if owner_email:
+            doc["owner_email"] = owner_email
+        container.upsert_item(doc)
 
 
 def update_dives_gps_by_location_name(

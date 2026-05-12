@@ -142,7 +142,7 @@ sequenceDiagram
 
     COS-->>FN2: dives Change Feed
     FN2->>FN2: gps_source=="suggested_by_llm" のみ通過
-    FN2->>COS: location_knowledge.upsert<br/>(id=normalized_name, samples 追記+平均で gps 更新)
+    FN2->>COS: location_knowledge.upsert<br/>(id=normalized_name, owner_email を継承, samples 追記+平均で gps 更新)
 ```
 
 ---
@@ -286,7 +286,8 @@ divelog/
 - **期限切れトークンの自動リカバリ**: Cosmos `tokens` コンテナの `defaultTtl=600` でサーバー側トークンが先に消えた場合でも、`frontend/src/api/dives.js` の `apiFetch` が `401` を検知したら `useAuth.logout()` を呼んで `sessionStorage` のトークンをクリアし、`/login` へリダイレクトする（古いトークンでの 401 ループを防ぐ）
 - **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
 - **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定した場合は **サーバー起動時に `RuntimeError` を携出して起動を失敗**させる（サイレントにバイパスさせない fail-start）
-- **リソースオーナースコープによる認可**: 認証成功時に `flask.g.current_email` にログインユーザーの email を保持し、`/api/dives*` の全 API から `owner_email` としてデータ層に伝携する。Cosmos DB 側では `WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner` でクエリし、他ユーザーのドキュメントは読み取り・更新ともに不可となる（IDOR 防止）。Functions の Change Feed 処理でも `zxu_uploads` の `owner_email` を `dives` ドキュメントにコピーしてエンドツーエンドでオーナーを呈証する
+- **リソースオーナースコープによる認可**: 認証成功時に `flask.g.current_email` にログインユーザーの email を保持し、`/api/dives*` の全 API から `owner_email` としてデータ層に伝携する。Cosmos DB 側では `WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner` でクエリし、他ユーザーのドキュメントは読み取り・更新ともに不可となる（IDOR 防止）。Functions の Change Feed 処理でも `zxu_uploads` の `owner_email` を `dives` ドキュメントにコピーしてエンドツーエンドでオーナーを呼証する。`location_knowledge` コンテナも同様に `owner_email` を埋め込み、`/api/locations` は「自分のナレッジ + owner_email 未設定の旧データ」のみを返し、`PUT /api/locations/knowledge/...` は別オーナーが登録したエントリの上書きを 403 で拒否する（クロスオーナー汚染防止）。
+- **GPS 提案承認の入力境界**: `POST /api/dives/uploads/{upload_id}/confirm` で `accept=true` のために適用される GPS は常に `zxu_uploads.gps_suggestion.suggested_lat/lon`（サーバが保存した LLM 提案値）のみで、クライアントが送付した任意座標は採用しない。これにより `dives.location.gps_source="suggested_by_llm"` とされる座標は LLM 出力値に限定され、`dive_knowledge_processor` 経由での `location_knowledge` 汚染を防ぐ。
 
 ### アプリケーションセキュリティ
 

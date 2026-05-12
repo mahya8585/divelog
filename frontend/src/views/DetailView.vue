@@ -268,6 +268,17 @@ function buildChart(profile) {
 }
 
 // ── Leaflet 詳細マップ ────────────────────────────────
+// Leaflet の bindPopup は文字列を HTML として評価するため、device/LLM 由来の
+// 文字列を直接補間しないように必ずエスケープする（CSP に依存しない多層防御）。
+function escapeHtml(s) {
+  if (s == null) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
 function buildMap(lat, lon, name) {
   const L = window.L
   if (!L || lat == null || lon == null) return
@@ -276,7 +287,10 @@ function buildMap(lat, lon, name) {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map)
   const icon = L.divIcon({ html: '🤿', className: '', iconSize: [28, 28], iconAnchor: [14, 14] })
-  L.marker([lat, lon], { icon }).bindPopup(`<strong>${name || ''}</strong>`).openPopup().addTo(map)
+  L.marker([lat, lon], { icon })
+    .bindPopup(`<strong>${escapeHtml(name)}</strong>`)
+    .openPopup()
+    .addTo(map)
 }
 
 // ── マウント ──────────────────────────────────────────

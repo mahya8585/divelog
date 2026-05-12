@@ -136,6 +136,17 @@ function displayLon(loc) {
   return loc.has_knowledge && loc.knowledge_gps_lon != null ? loc.knowledge_gps_lon : loc.gps_lon
 }
 
+// HTML エスケープ（Leaflet bindPopup 用）
+function escapeHtml(s) {
+  if (s == null) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 // ── Leaflet マップ ──────────────────────────────────────────
 let leafletMap   = null
 let markerLayer  = null
@@ -169,8 +180,10 @@ function updateMap() {
       opacity: 1,
       fillOpacity: 0.75,
     })
+    // Leaflet の bindPopup は HTML 評価。ロケーション名はユーザ制御できる文字列なので
+    // 必ずエスケープする（CSP に依存しない多層防御）。
     marker.bindPopup(
-      `<strong>${loc.name}</strong><br>${loc.dive_count} ダイブ` +
+      `<strong>${escapeHtml(loc.name)}</strong><br>${Number(loc.dive_count) || 0} ダイブ` +
       (loc.has_knowledge ? '<br><span class="text-success">✓ GPS 登録済</span>' : ''),
     )
     marker.on('click', () => openEdit(loc))
