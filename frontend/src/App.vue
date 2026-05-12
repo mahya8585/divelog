@@ -41,6 +41,9 @@
           <router-link to="/upload" class="side-menu-item" @click="menuOpen = false">
             <i class="bi bi-cloud-upload me-2"></i>ダイブログ登録
           </router-link>
+          <router-link to="/locations" class="side-menu-item" @click="menuOpen = false">
+            <i class="bi bi-geo-alt me-2"></i>ロケーション一覧
+          </router-link>
           <button class="side-menu-item side-menu-logout btn btn-link w-100 text-start" @click="doLogout">
             <i class="bi bi-box-arrow-right me-2"></i>ログアウト
           </button>

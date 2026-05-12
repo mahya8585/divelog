@@ -57,12 +57,25 @@ from data import (
     get_token_email,
     get_user,
     load_all_dives,
+    load_all_location_knowledge,
     load_dive,
     save_dive,
     save_zxu_upload,
     save_token,
+    update_dives_gps_by_location_name,
     update_zxu_upload,
+    upsert_location_knowledge_entry,
 )
+
+try:
+    from services.location_knowledge import normalize_name as _normalize_location_name
+except Exception:
+    def _normalize_location_name(name):  # type: ignore[misc]
+        import re, unicodedata
+        if not name:
+            return ""
+        s = unicodedata.normalize("NFKC", str(name)).lower()
+        return re.sub(r"[\s`'\"\\/<>{}\[\]|,;:()!?#@$%^&*+=~]+", "", s)
 
 try:
     from workflow.convert_zxu_to_json import convert_zxu_to_json as _convert_zxu, extract_location_only as _extract_location_only
@@ -268,7 +281,7 @@ if allowed_origins:
         origins=[o.strip() for o in allowed_origins.split(",") if o.strip()],
         supports_credentials=False,
         allow_headers=["Authorization", "Content-Type"],
-        methods=["GET", "POST", "OPTIONS"],
+        methods=["GET", "POST", "PUT", "OPTIONS"],
     )
 else:
     # ALLOWED_ORIGINS 未設定時は CORS を一切許可しない（同一オリジンのみ）
@@ -651,6 +664,111 @@ def get_dive(dive_id: str):
 
     tags = extract_tags(dive.get("memo") or "")
     return jsonify({"dive": dive, "tags": tags})
+
+
+# ── ロケーション API ──────────────────────────────────────
+
+@app.route("/api/locations", methods=["GET"])
+@require_auth
+@limiter.limit("60 per minute")
+def get_locations():
+    """全ダイブからユニークなロケーション一覧を返す。location_knowledge のデータもマージする。"""
+    owner = _current_owner()
+    dives = load_all_dives(owner_email=owner)
+
+    # ユニークなロケーション名ごとに集計
+    loc_map: dict[str, dict] = {}
+    for d in dives:
+        loc = d.get("location") or {}
+        name = (loc.get("name") or "").strip()
+        if not name:
+            continue
+        if name not in loc_map:
+            loc_map[name] = {
+                "name": name,
+                "gps_lat": loc.get("gps_lat"),
+                "gps_lon": loc.get("gps_lon"),
+                "dive_count": 0,
+            }
+        loc_map[name]["dive_count"] += 1
+
+    # location_knowledge をマージ（正規化名で照合）
+    knowledge_by_norm: dict[str, dict] = {}
+    for k in load_all_location_knowledge():
+        norm = k.get("normalized_name")
+        if norm:
+            knowledge_by_norm[norm] = k
+
+    result = []
+    for name, info in loc_map.items():
+        norm = _normalize_location_name(name)
+        knowledge = knowledge_by_norm.get(norm)
+        entry: dict = {
+            "name": name,
+            "normalized_name": norm,
+            "gps_lat": info["gps_lat"],
+            "gps_lon": info["gps_lon"],
+            "dive_count": info["dive_count"],
+            "has_knowledge": knowledge is not None,
+        }
+        if knowledge:
+            entry["knowledge_gps_lat"] = knowledge.get("gps_lat")
+            entry["knowledge_gps_lon"] = knowledge.get("gps_lon")
+        result.append(entry)
+
+    result.sort(key=lambda x: -x["dive_count"])
+    return jsonify({"locations": result})
+
+
+# ロケーション名バリデーション（パス引数として安全な文字列）
+_NORM_NAME_RE = re.compile(r"^[\w\-]{1,200}$")
+
+
+@app.route("/api/locations/knowledge/<norm_name>", methods=["PUT"])
+@require_auth
+@limiter.limit("30 per minute")
+def put_location_knowledge(norm_name: str):
+    """ロケーション知識の GPS を更新し、同名ダイブの GPS も一括更新する。"""
+    if not _NORM_NAME_RE.fullmatch(norm_name):
+        return jsonify({"error": "Invalid norm_name"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    canonical_name = (payload.get("canonical_name") or "").strip()
+    if not canonical_name:
+        return jsonify({"error": "canonical_name が必要です"}), 400
+
+    lat_raw = payload.get("gps_lat")
+    lon_raw = payload.get("gps_lon")
+    try:
+        new_lat = float(lat_raw)
+        new_lon = float(lon_raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "gps_lat / gps_lon が不正です"}), 400
+    if not (-90 <= new_lat <= 90 and -180 <= new_lon <= 180):
+        return jsonify({"error": "GPS 値が範囲外です"}), 400
+
+    try:
+        upsert_location_knowledge_entry(norm_name, canonical_name, new_lat, new_lon)
+    except Exception:
+        app.logger.exception("location_knowledge の更新に失敗")
+        return jsonify({"error": "location_knowledge の更新に失敗しました"}), 500
+
+    try:
+        dives_updated = update_dives_gps_by_location_name(
+            canonical_name, new_lat, new_lon, owner_email=_current_owner()
+        )
+    except Exception:
+        app.logger.exception("ダイブ GPS 一括更新に失敗")
+        dives_updated = 0
+
+    return jsonify({
+        "updated": True,
+        "normalized_name": norm_name,
+        "canonical_name": canonical_name,
+        "gps_lat": new_lat,
+        "gps_lon": new_lon,
+        "dives_updated": dives_updated,
+    })
 
 
 # 413 (アップロードサイズ超過) 等もハンドル

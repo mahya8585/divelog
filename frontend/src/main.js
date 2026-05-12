@@ -15,6 +15,7 @@ import HomeView from './views/HomeView.vue'
 import DetailView from './views/DetailView.vue'
 import UploadView from './views/UploadView.vue'
 import LoginView from './views/LoginView.vue'
+import LocationsView from './views/LocationsView.vue'
 import { useAuth } from './composables/useAuth.js'
 import { trackError } from './appInsights.js'
 
@@ -25,6 +26,7 @@ const router = createRouter({
     { path: '/', component: HomeView },
     { path: '/dive/:id', component: DetailView },
     { path: '/upload', component: UploadView },
+    { path: '/locations', component: LocationsView },
   ],
 })
 

@@ -463,6 +463,114 @@ def delete_token(token: str) -> None:
         pass
 
 
+def load_all_location_knowledge() -> list[dict]:
+    """location_knowledge コンテナから全件取得する（Cosmos DB 利用時のみ）。
+    normalized_name が定義されているエントリのみ返す（フィードバック型ドキュメントを除外）。
+    """
+    if not _use_cosmos():
+        return []
+    try:
+        container = _get_location_knowledge_container()
+        query = "SELECT * FROM c WHERE IS_DEFINED(c.normalized_name)"
+        return list(container.query_items(query, enable_cross_partition_query=True))
+    except Exception:
+        _logger.exception("load_all_location_knowledge に失敗")
+        return []
+
+
+def upsert_location_knowledge_entry(
+    normalized_name: str,
+    canonical_name: str,
+    gps_lat: float,
+    gps_lon: float,
+) -> None:
+    """location_knowledge エントリを更新または新規作成する（Cosmos DB 利用時のみ）。"""
+    if not _use_cosmos():
+        return
+    container = _get_location_knowledge_container()
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    try:
+        existing = container.read_item(item=normalized_name, partition_key=normalized_name)
+    except CosmosResourceNotFoundError:
+        existing = None
+    except Exception:
+        _logger.exception("upsert_location_knowledge_entry: read_item に失敗 norm=%s", normalized_name)
+        existing = None
+
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        existing["canonical_name"] = canonical_name
+        existing["gps_lat"] = gps_lat
+        existing["gps_lon"] = gps_lon
+        existing["updated_at"] = now
+        container.upsert_item(existing)
+    else:
+        container.upsert_item({
+            "id": normalized_name,
+            "normalized_name": normalized_name,
+            "canonical_name": canonical_name,
+            "gps_lat": gps_lat,
+            "gps_lon": gps_lon,
+            "samples": [],
+            "created_at": now,
+            "updated_at": now,
+        })
+
+
+def update_dives_gps_by_location_name(
+    location_name: str,
+    new_lat: float,
+    new_lon: float,
+    owner_email: str | None = None,
+) -> int:
+    """指定ロケーション名を持つ全ダイブの GPS を更新する。更新件数を返す。
+    Cosmos DB 利用時はクエリで対象を絞り upsert する。
+    JSON フォールバック時は workflow/json/ 以下のファイルを直接更新する。
+    """
+    count = 0
+    if _use_cosmos():
+        container = _get_container()
+        query = "SELECT * FROM c WHERE c.location.name = @name"
+        params = [{"name": "@name", "value": location_name}]
+        try:
+            items = list(container.query_items(
+                query=query,
+                parameters=params,
+                enable_cross_partition_query=True,
+            ))
+        except Exception:
+            _logger.exception("update_dives_gps_by_location_name: Cosmos クエリに失敗")
+            return 0
+        for item in items:
+            if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
+                continue
+            loc = dict(item.get("location") or {})
+            loc["gps_lat"] = new_lat
+            loc["gps_lon"] = new_lon
+            item["location"] = loc
+            try:
+                container.upsert_item(item)
+                count += 1
+            except Exception:
+                _logger.exception("update_dives_gps_by_location_name: upsert に失敗 id=%s", item.get("id"))
+    else:
+        for path in JSON_DIR.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    dive = json.load(f)
+                loc = dive.get("location") or {}
+                if loc.get("name") == location_name:
+                    loc["gps_lat"] = new_lat
+                    loc["gps_lon"] = new_lon
+                    dive["location"] = loc
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(dive, f, ensure_ascii=False, indent=2)
+                    count += 1
+            except Exception:
+                _logger.exception("update_dives_gps_by_location_name: ファイル更新に失敗 path=%s", path)
+    return count
+
+
 def seed_user_if_needed(email: str, password: str) -> None:
     """ユーザーが存在しない場合のみ作成する（初回セットアップ用）。"""
     if not email or not password:
