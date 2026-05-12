@@ -196,8 +196,9 @@ async function loadLocations() {
     const data = await fetchLocations()
     locations.value = data.locations ?? []
     updateMap()
-  } catch {
-    error.value = 'データの取得に失敗しました。バックエンドが起動しているか確認してください。'
+  } catch (e) {
+    console.error('fetchLocations failed:', e)
+    error.value = 'データの取得に失敗しました。'
   } finally {
     loading.value = false
   }
@@ -210,8 +211,8 @@ function openEdit(loc) {
   editSuccess.value = null
   editForm.value = {
     canonical_name: loc.name,
-    gps_lat: displayLat(loc) ?? '',
-    gps_lon: displayLon(loc) ?? '',
+    gps_lat: displayLat(loc) ?? null,
+    gps_lon: displayLon(loc) ?? null,
   }
   flyToLocation(loc)
 }

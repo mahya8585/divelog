@@ -542,6 +542,7 @@ def update_dives_gps_by_location_name(
             _logger.exception("update_dives_gps_by_location_name: Cosmos クエリに失敗")
             return 0
         for item in items:
+            # owner_email 未設定ドキュメントは旧データ互換として更新対象に含める
             if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
                 continue
             loc = dict(item.get("location") or {})
