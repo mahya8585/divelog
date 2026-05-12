@@ -49,8 +49,9 @@ param redisHostName string = ''
 @description('Redis SSL ポート')
 param redisSslPort int = 6380
 
-@description('Redis リソース ID（listKeys 取得用）')
-param redisResourceId string = ''
+// `redisResourceId` パラメータは過去にアクセスキー認証用に listKeys で参照していたが、
+// Azure ポリシー（API キー禁止）対応のため Entra ID (AAD) 認証へ移行。
+// UAMI への Data アクセスポリシー割り当ては main.bicep から redisAccessPolicy.bicep を呼ぶ。
 
 @description('トークン TTL（秒）。Cosmos tokens コンテナの defaultTtl と一致させる。')
 param tokenTtlSeconds int = 600
@@ -110,7 +111,16 @@ var baseEnv = [
 ]
 var appInsightsEnv = !empty(appInsightsConnectionString) ? [{ name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }] : []
 var secretKeyEnv = !empty(secretKey) ? [{ name: 'SECRET_KEY', secretRef: 'secret-key' }] : []
-var redisEnv = !empty(redisHostName) ? [{ name: 'RATELIMIT_STORAGE_URI', secretRef: 'ratelimit-storage-uri' }] : []
+// Redis は Entra ID (AAD) 認証を使うため、URI にパスワードは含めない。
+// backend/app.py 側で REDIS_AAD_ENABLED=true を見て DefaultAzureCredential (UAMI)
+// から `https://redis.azure.com/.default` のトークンを取得し AUTH する。
+// AZURE_REDIS_USERNAME は Redis 側のアクセスポリシー割り当てで設定した
+// objectId（= UAMI の principalId）を渡す。
+var redisEnv = !empty(redisHostName) ? [
+  { name: 'RATELIMIT_STORAGE_URI', value: 'rediss://${redisHostName}:${redisSslPort}/0?ssl_cert_reqs=required' }
+  { name: 'REDIS_AAD_ENABLED',     value: 'true' }
+  { name: 'AZURE_REDIS_USERNAME',  value: uaMI.properties.principalId }
+] : []
 var llmBaseEnv = [{ name: 'LLM_PROVIDER', value: llmProvider }]
 var llmOpenaiEnv = !empty(openaiApiKey) ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : []
 // Azure OpenAI: endpoint が設定されていれば env を出力する。
@@ -125,15 +135,11 @@ var llmAzureBaseEnv = !empty(azureOpenaiEndpoint) ? [
 var llmAzureKeyEnv = !empty(azureOpenaiApiKey) ? [{ name: 'AZURE_OPENAI_API_KEY', secretRef: 'azure-openai-api-key' }] : []
 var containerEnv = concat(baseEnv, appInsightsEnv, secretKeyEnv, redisEnv, llmBaseEnv, llmOpenaiEnv, llmAzureBaseEnv, llmAzureKeyEnv)
 
-// Redis primaryKey を listKeys で取得して secret に梱める
-var redisPrimaryKey = !empty(redisResourceId) ? listKeys(redisResourceId, '2024-03-01').primaryKey : ''
-var redisStorageUri = !empty(redisHostName) ? 'rediss://:${redisPrimaryKey}@${redisHostName}:${redisSslPort}/0?ssl_cert_reqs=required' : ''
-
+// Redis 接続は AAD 認証のため secret 不要（listKeys 廃止）。
 var baseSecrets = !empty(secretKey) ? [{ name: 'secret-key', value: secretKey }] : []
-var redisSecrets = !empty(redisHostName) ? [{ name: 'ratelimit-storage-uri', value: redisStorageUri }] : []
 var openaiSecrets = !empty(openaiApiKey) ? [{ name: 'openai-api-key', value: openaiApiKey }] : []
 var azureOpenaiSecrets = !empty(azureOpenaiApiKey) ? [{ name: 'azure-openai-api-key', value: azureOpenaiApiKey }] : []
-var containerSecrets = concat(baseSecrets, redisSecrets, openaiSecrets, azureOpenaiSecrets)
+var containerSecrets = concat(baseSecrets, openaiSecrets, azureOpenaiSecrets)
 
 // ③ Container App 本体
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
