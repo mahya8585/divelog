@@ -311,9 +311,11 @@ function initEditMap() {
 }
 
 function destroyEditMap() {
-  if (editMarker && editLeafletMap) {
+  if (editMarker) {
     editMarker.off('dragend', onEditMarkerDragEnd)
-    editLeafletMap.removeLayer(editMarker)
+    if (editLeafletMap) {
+      editLeafletMap.removeLayer(editMarker)
+    }
   }
   editMarker = null
   if (editLeafletMap) {
