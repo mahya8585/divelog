@@ -117,7 +117,7 @@ GitHub Actions の `deploy-backend.yml` の `Update LLM secrets and env on Conta
    - `AZURE_OPENAI_API_VERSION=2025-01-01-preview`
    - `GPS_DIFF_THRESHOLD_KM=25`
 
-   Secret `AZURE_OPENAI_API_KEY` は **未設定のまま** にすることで CI が MI 認証分岐に入る（`docs/deployment.md` の「GPS 提案 LLM 用の GitHub Secrets / Variables」節参照）。
+   Azure OpenAI / Foundry の認証は常に Container App の UAMI で行うため、`AZURE_OPENAI_API_KEY` Secret は **設定不要** （コード / Bicep / CI から API キー認証経路自体を削除済み。`docs/deployment.md` の「GPS 提案 LLM 用の GitHub Secrets / Variables」節参照）。
 
 4. **副次対応**: 環境変数更新によるリビジョン再起動直後に DNS 解決失敗 (`japanwest-0.in.applicationinsights.azure.com` が一時的に解決できない) + gunicorn worker timeout で `/api/login` が 500 を返す瞬間があった。これは Container Apps 環境の起動直後の一過性事象で、`az containerapp revision restart` 後 30 秒程度で自動回復することを確認。
 

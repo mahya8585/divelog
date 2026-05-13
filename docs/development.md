@@ -32,11 +32,10 @@ python app.py
 
 ### データソース
 
-`COSMOS_ENDPOINT` が設定されている場合は Cosmos DB を使用します（認証は `DefaultAzureCredential` を使用）。  
-ローカル開発時に `COSMOS_KEY` も設定されている場合はキーベース認証にフォールバックします。  
+`COSMOS_ENDPOINT` が設定されている場合は Cosmos DB を使用します（認証は常に `DefaultAzureCredential` を使用。キー認証はコードから削除済み）。  
 `COSMOS_ENDPOINT` が未設定の場合は `workflow/json/` の JSON ファイルをフォールバックとして使用します。
 
-> **Note**: Azure 上では `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID を指定し、Entra ID (RBAC) 認証で Cosmos DB に接続します。
+> **Note**: Azure 上では `AZURE_CLIENT_ID` 環境変数でユーザー割り当てマネージド ID を指定し、Entra ID (RBAC) 認証で Cosmos DB に接続します。ローカル開発も `az login` 済みアカウントと Cosmos 側データプレーン RBAC（`Cosmos DB Built-in Data Contributor` 等）を録録して使います。
 
 ---
 
@@ -96,7 +95,6 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `FORWARDED_ALLOW_IPS` | `*`（Dockerfile デフォルト） | gunicorn が `X-Forwarded-*` ヘッダを信頼する送信元 IP。Container Apps の Envoy フロントとして動作させるため `*` を採用し、ProxyFix と二段階で保護 |
 | `AUTH_DISABLED` | (空) | `true` を明示設定し、**かつ `FLASK_DEBUG=true`** のときのみ認証をスキップ（ローカル開発限定、警告ログを出力） |
 | `COSMOS_ENDPOINT` | — | Cosmos DB エンドポイント URL |
-| `COSMOS_KEY` | — | Cosmos DB 主キー（ローカル開発用。本番は Entra ID RBAC 認証を使用） |
 | `COSMOS_DATABASE` | `divelog` | Cosmos DB データベース名 |
 | `COSMOS_CONTAINER` | `dives` | ダイブデータコンテナ名 |
 | `COSMOS_ZXU_CONTAINER` | `zxu_uploads` | ZXU 生データアップロード用コンテナ名（Change Feed トリガー元） |
@@ -105,8 +103,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
 | `LLM_PROVIDER` | `openai` | LLM プロバイダー (`openai` / `azure_openai`)。`backend/services/location_resolver.py` がこの値で実装を切り替えます |
 | `OPENAI_API_KEY` | — | `LLM_PROVIDER=openai` 時に必須。未設定時は GPS 提案がスキップされ、即時 `status=uploaded` で受け付けられます |
-| `AZURE_OPENAI_ENDPOINT` | — | `LLM_PROVIDER=azure_openai` 時に必須 |
-| `AZURE_OPENAI_API_KEY` | — | 同上 |
+| `AZURE_OPENAI_ENDPOINT` | — | `LLM_PROVIDER=azure_openai` 時に必須。認証は常に UAMI / DefaultAzureCredential を使用し、API キー認証はサポートしない |
 | `AZURE_OPENAI_DEPLOYMENT` | — | Azure OpenAI のデプロイメント名 |
 | `AZURE_OPENAI_API_VERSION` | `2024-10-21` | Azure OpenAI API バージョン |
 | `GPS_DIFF_THRESHOLD_KM` | `25` | 現在 GPS と LLM 提案の距離がこの km 以上の場合に提案を `pending_review` で返却 |
@@ -114,7 +111,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `AZURE_CLIENT_ID` | — | ユーザー割り当てマネージド ID のクライアント ID（Azure 上のみ） |
 | `AUTH_EMAIL` | — | （ローカルフォールバック専用）管理者メール。Cosmos DB 利用時は使用しない |
 | `AUTH_PASSWORD` | — | （ローカルフォールバック専用）管理者パスワード。Cosmos DB 利用時は使用しない |
-| `SECRET_KEY` | ランダム生成 | トークン署名用シークレットキー（ローカルフォールバック用） |
+| `SECRET_KEY` | ランダム生成（`FLASK_DEBUG=true` 時のみ） | トークン署名用シークレットキー。**本番（`FLASK_DEBUG ≠ true`）では必須・未設定だと起動に失敗します** |
 
 > **本番でのユーザー管理**: Cosmos DB を使う本番環境では `AUTH_EMAIL` / `AUTH_PASSWORD` 環境変数を **設定しません**。代わりに [`scripts/seed_user.py`](../scripts/seed_user.py) で `users` コンテナへ直接シードします。
 
@@ -149,7 +146,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 
 ```bash
 cd workflow
-# .env (プロジェクトルート) に COSMOS_ENDPOINT, COSMOS_KEY を設定してから実行
+# .env (プロジェクトルート) に COSMOS_ENDPOINT を設定し、`az login` で Cosmos 側 RBAC を付与済みアカウントを有効化してから実行
 python import_cosmos.py
 ```
 

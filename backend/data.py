@@ -22,7 +22,6 @@ JSON_DIR = Path(os.environ.get("JSON_DIR", str(_DEFAULT_JSON_DIR)))
 
 # ── Cosmos DB 設定（環境変数） ───────────────────────────
 COSMOS_ENDPOINT         = os.environ.get("COSMOS_ENDPOINT", "")
-COSMOS_KEY              = os.environ.get("COSMOS_KEY", "")
 COSMOS_DATABASE         = os.environ.get("COSMOS_DATABASE", "divelog")
 COSMOS_CONTAINER        = os.environ.get("COSMOS_CONTAINER", "dives")
 COSMOS_USERS_CONTAINER  = os.environ.get("COSMOS_USERS_CONTAINER",  "users")
@@ -45,10 +44,13 @@ def _use_cosmos() -> bool:
 # ── Cosmos DB クライアント共通ヘルパー ─────────────────────
 
 def _get_cosmos_client():
-    """Cosmos DB クライアントを返す（接続キー or マネージド ID）。"""
+    """Cosmos DB クライアントを返す（マネージド ID 認証のみ）。
+
+    アカウントポリシーで `disableLocalAuth: true` を強制しているため、
+    キーベース認証は意図的にサポートしない（リソース側ポリシーが破られた環境への
+    フォールバックも避ける）。
+    """
     from azure.cosmos import CosmosClient
-    if COSMOS_KEY:
-        return CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
     from azure.identity import DefaultAzureCredential
     return CosmosClient(COSMOS_ENDPOINT, credential=DefaultAzureCredential())
 
@@ -578,8 +580,10 @@ def update_dives_gps_by_location_name(
             _logger.exception("update_dives_gps_by_location_name: Cosmos クエリに失敗")
             return 0
         for item in items:
-            # owner_email 未設定ドキュメントは旧データ互換として更新対象に含める
-            if owner_email and item.get("owner_email") and item.get("owner_email") != owner_email:
+            # 書き込み系は「読み取りは緩く、書き込みは厳格に」の原則に従い、
+            # 所有者一致を必須とする（owner_email 未設定の旧データは更新対象外）。
+            # 旧データを引き取りたい場合は別途マイグレーションスクリプトを使う。
+            if owner_email and item.get("owner_email") != owner_email:
                 continue
             loc = dict(item.get("location") or {})
             loc["gps_lat"] = new_lat

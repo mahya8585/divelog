@@ -40,8 +40,12 @@ def _get_container():
     return db.get_container_client(COSMOS_KNOWLEDGE_CONTAINER)
 
 
-def lookup_by_name(name: str) -> dict | None:
-    """正規化名で完全一致するナレッジ 1 件を返す（存在しなければ None）。"""
+def lookup_by_name(name: str, owner_email: str | None = None) -> dict | None:
+    """正規化名で完全一致するナレッジ 1 件を返す（存在しなければ None）。
+
+    owner_email 指定時は所有者一致 or 旧データ（owner_email 未設定）のみを返す。
+    他オーナーが登録した GPS が LLM 提案として漏れるのを防ぐ（IDOR 対策）。
+    """
     norm = normalize_name(name)
     if not norm:
         return None
@@ -50,14 +54,23 @@ def lookup_by_name(name: str) -> dict | None:
     except Exception:
         _logger.exception("location_knowledge コンテナへの接続に失敗")
         return None
-    query = (
-        "SELECT TOP 1 * FROM c WHERE c.normalized_name = @n"
-    )
+    if owner_email:
+        query = (
+            "SELECT TOP 1 * FROM c WHERE c.normalized_name = @n "
+            "AND (NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner)"
+        )
+        params = [
+            {"name": "@n", "value": norm},
+            {"name": "@owner", "value": owner_email},
+        ]
+    else:
+        query = "SELECT TOP 1 * FROM c WHERE c.normalized_name = @n"
+        params = [{"name": "@n", "value": norm}]
     try:
         items = list(
             container.query_items(
                 query=query,
-                parameters=[{"name": "@n", "value": norm}],
+                parameters=params,
                 enable_cross_partition_query=True,
             )
         )
@@ -67,8 +80,11 @@ def lookup_by_name(name: str) -> dict | None:
     return items[0] if items else None
 
 
-def search_similar(name: str, top_k: int = 3) -> list[dict]:
-    """正規化名で CONTAINS 部分一致する上位 K 件を返す。"""
+def search_similar(name: str, top_k: int = 3, owner_email: str | None = None) -> list[dict]:
+    """正規化名で CONTAINS 部分一致する上位 K 件を返す。
+
+    owner_email 指定時は所有者一致 or 旧データ（owner_email 未設定）のみを返す。
+    """
     norm = normalize_name(name)
     if not norm:
         return []
@@ -78,14 +94,25 @@ def search_similar(name: str, top_k: int = 3) -> list[dict]:
     except Exception:
         _logger.exception("location_knowledge コンテナへの接続に失敗")
         return []
-    query = (
-        f"SELECT TOP {k} * FROM c WHERE CONTAINS(c.normalized_name, @n, true)"
-    )
+    if owner_email:
+        query = (
+            f"SELECT TOP {k} * FROM c WHERE CONTAINS(c.normalized_name, @n, true) "
+            "AND (NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner)"
+        )
+        params = [
+            {"name": "@n", "value": norm},
+            {"name": "@owner", "value": owner_email},
+        ]
+    else:
+        query = (
+            f"SELECT TOP {k} * FROM c WHERE CONTAINS(c.normalized_name, @n, true)"
+        )
+        params = [{"name": "@n", "value": norm}]
     try:
         return list(
             container.query_items(
                 query=query,
-                parameters=[{"name": "@n", "value": norm}],
+                parameters=params,
                 enable_cross_partition_query=True,
             )
         )
