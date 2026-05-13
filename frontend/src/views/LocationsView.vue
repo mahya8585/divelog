@@ -310,8 +310,8 @@ function initEditMap() {
 function destroyEditMap() {
   if (editMarker && editLeafletMap) {
     editLeafletMap.removeLayer(editMarker)
-    editMarker = null
   }
+  editMarker = null
   if (editLeafletMap) {
     editLeafletMap.remove()
     editLeafletMap = null
