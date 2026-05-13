@@ -46,6 +46,7 @@ GitHub Actions の `deploy-frontend.yml` は `VITE_API_BASE_URL: ${{ secrets.VIT
 ### 長期修正計画とその進捗
 
 - **進行中**: フロントエンドのバックエンド URL を「ビルド時埋め込み」から「ランタイム取得」に切り替える検討。SWA `appsettings` 経由で `VITE_API_BASE_URL` を SPA に渡し、起動時に `/.auth/me` のようなエンドポイントで読み込めば、FQDN 変更時にフロント再ビルド不要にできる。
+- **検討済み / 見送り (2026-05-13)**: **SWA Linked Backend** で `/api/*` を Container Apps にエッジ転送する構成を試作したが、Linked Backend は **Static Web Apps Standard プラン必須**（Free SKU では `SkuCode 'Free' is invalid.` で作成不可）。本プロジェクトはコスト優先のため Free SKU を維持し、Linked Backend 化は見送り。試作コミットは git revert で打ち消し、`VITE_API_BASE_URL` 埋め込み方式を継続している。Standard プラン（約 $9/月）への切り替え判断を行う際は同方式を再検討する。
 - **未着手**: Container Apps Environment を `azd` 含めて完全に **再作成しない運用** に固める。`infra/main.bicep` の `cae-divelog` 名は固定だが、Environment の **DNS サフィックス（icybeach / proudpond の部分）は再作成のたびに変わる** ため、本質的には独自ドメイン（カスタムドメイン）を Container App に紐付けて FQDN を不変化するのが恒久策。
 
 ---
