@@ -2,10 +2,11 @@
  * 認証状態管理コンポーザブル
  * - sessionStorage にトークンを保存
  * - 10 分間操作がなければ自動ログアウト
+ * - API は常に相対パス `/api/*`。本番は SWA Linked Backend が Container Apps へ転送し、
+ *   開発は Vite proxy が localhost:8000 へ転送する。
  */
 import { ref, computed } from 'vue'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const STORAGE_KEY = 'divelog_token'
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000 // 10 分
 
@@ -34,7 +35,7 @@ async function _doLogout() {
   clearTimeout(_inactivityTimer)
   // サーバー側のトークンを削除（失敗しても続行）
   if (token) {
-    fetch(`${BASE_URL}/api/logout`, {
+    fetch(`/api/logout`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }).catch((err) => {
@@ -61,7 +62,7 @@ function _startTracking() {
  * @param {string} password
  */
 async function login(email, password) {
-  const res = await fetch(`${BASE_URL}/api/login`, {
+  const res = await fetch(`/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),

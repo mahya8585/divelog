@@ -45,8 +45,12 @@ GitHub Actions の `deploy-frontend.yml` は `VITE_API_BASE_URL: ${{ secrets.VIT
 
 ### 長期修正計画とその進捗
 
-- **進行中**: フロントエンドのバックエンド URL を「ビルド時埋め込み」から「ランタイム取得」に切り替える検討。SWA `appsettings` 経由で `VITE_API_BASE_URL` を SPA に渡し、起動時に `/.auth/me` のようなエンドポイントで読み込めば、FQDN 変更時にフロント再ビルド不要にできる。
-- **未着手**: Container Apps Environment を `azd` 含めて完全に **再作成しない運用** に固める。`infra/main.bicep` の `cae-divelog` 名は固定だが、Environment の **DNS サフィックス（icybeach / proudpond の部分）は再作成のたびに変わる** ため、本質的には独自ドメイン（カスタムドメイン）を Container App に紐付けて FQDN を不変化するのが恒久策。
+- **完了 (2026-05-13)**: **SWA Linked Backend** を導入して恒久対応。`infra/modules/staticWebAppLinkedBackend.bicep` で SWA を Container Apps にリンクし、`/api/*` を SWA edge から backend へエッジ転送する構成に変更。SPA は相対パス `/api/*` で動作するようになり、`VITE_API_BASE_URL` 自体を廃止（[frontend/src/api/dives.js](../frontend/src/api/dives.js), [frontend/src/api/locations.js](../frontend/src/api/locations.js), [frontend/src/composables/useAuth.js](../frontend/src/composables/useAuth.js)）。これにより:
+    - Container Apps Environment の DNS サフィックスが変わってもフロント再ビルド不要（SWA → backend はリソース ID 接続）
+    - ブラウザから見ると同一オリジン → CORS / プリフライト不要
+    - CSP `connect-src` を `'self' + AppInsights` のみに厳格化（backend origin を含めない）
+    - GitHub Actions の `VITE_API_BASE_URL` secret も不要となり削除可能
+- **任意 (未着手)**: 独自ドメイン（カスタムドメイン）を Container App と SWA に紐付ける運用。Linked Backend 化により必須ではなくなったが、ブランディング目的で必要なら別途検討。
 
 ---
 

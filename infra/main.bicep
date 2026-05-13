@@ -187,12 +187,15 @@ module functions 'modules/functionApp.bicep' = {
   }
 }
 
-// 8. SWA に backend URL を appsetting として設定
-module frontendConfig 'modules/staticWebAppConfig.bicep' = {
-  name: 'frontend-config'
+// 8. SWA Linked Backend: /api/* を Container Apps バックエンドへエッジ転送する。
+//    フロントは VITE_API_BASE_URL なし（相対 /api/*）で動作するため、
+//    Container Apps の FQDN サフィックスが変わってもフロント再ビルド不要（恒久対応の核）。
+module frontendLinkedBackend 'modules/staticWebAppLinkedBackend.bicep' = {
+  name: 'frontend-linked-backend'
   params: {
-    staticWebAppName: frontend.outputs.name
-    backendUrl      : backend.outputs.fqdn
+    staticWebAppName : frontend.outputs.name
+    backendResourceId: backend.outputs.resourceId
+    backendRegion    : location
   }
 }
 

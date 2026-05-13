@@ -2,10 +2,12 @@
  * staticwebapp.config.json の CSP 内プレースホルダをビルド時に置換し、
  * `dist/staticwebapp.config.json` として出力する。
  *
- * - __BACKEND_ORIGIN__         : VITE_API_BASE_URL の origin
  * - __APPINSIGHTS_INGESTION_ORIGIN__ : VITE_APPINSIGHTS_CONNECTION_STRING から
  *                                  IngestionEndpoint を抽出した origin（ワイルドカード不要）
- * 未設定 / 不正な値は空文字列に置換され、'self' のみ許可される。
+ *
+ * バックエンド URL は埋め込まない。SPA は相対パス `/api/*` で動作し、SWA Linked Backend
+ * が Container Apps へエッジ転送するため、ブラウザから見れば同一オリジン。
+ * 未設定 / 不正な値は空文字列に置換され、CSP は 'self' のみ許可される。
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -26,8 +28,6 @@ function toOrigin(rawUrl) {
   }
 }
 
-let backendOrigin = toOrigin(process.env.VITE_API_BASE_URL || '')
-
 // Application Insights 接続文字列から IngestionEndpoint を抽出
 let aiIngestionOrigin = ''
 const aiConn = process.env.VITE_APPINSIGHTS_CONNECTION_STRING || ''
@@ -38,12 +38,10 @@ if (aiConn) {
 
 const text = readFileSync(src, 'utf8')
 const replaced = text
-  .replaceAll('__BACKEND_ORIGIN__', backendOrigin)
   .replaceAll('__APPINSIGHTS_INGESTION_ORIGIN__', aiIngestionOrigin)
   .replace(/\s{2,}/g, ' ')
 
 mkdirSync(dirname(dst), { recursive: true })
 writeFileSync(dst, replaced, 'utf8')
 console.log(`[process-swa-config] wrote ${dst}`)
-console.log(`  backend origin   : ${backendOrigin || '(self only)'}`)
 console.log(`  appinsights origin: ${aiIngestionOrigin || '(self only)'}`)

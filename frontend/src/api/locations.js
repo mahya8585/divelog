@@ -1,9 +1,9 @@
 /**
  * ロケーション API クライアント
+ *
+ * URL は常に相対パス `/api/*` を使う（SWA Linked Backend 経由）。
  */
 import { useAuth } from '../composables/useAuth.js'
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 function apiFetch(url, options = {}) {
   const { getToken, logout } = useAuth()
@@ -25,7 +25,7 @@ function apiFetch(url, options = {}) {
  * @returns {Promise<{locations: Array}>}
  */
 export async function fetchLocations() {
-  const res = await apiFetch(`${BASE_URL}/api/locations`)
+  const res = await apiFetch(`/api/locations`)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
 }
@@ -38,7 +38,7 @@ export async function fetchLocations() {
  */
 export async function updateLocationKnowledge(normName, data) {
   const res = await apiFetch(
-    `${BASE_URL}/api/locations/knowledge/${encodeURIComponent(normName)}`,
+    `/api/locations/knowledge/${encodeURIComponent(normName)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

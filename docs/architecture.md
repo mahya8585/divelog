@@ -43,7 +43,7 @@ flowchart LR
 
     %% フロー
     User -- "HTTPS<br/>SPA 取得" --> SWA
-    User -- "HTTPS API<br/>VITE_API_BASE_URL" --> CA
+    User -- "HTTPS /api/*<br/>(SWA Linked Backend 経由)" --> CA
     User -. "テレメトリ<br/>(CSP: __APPINSIGHTS_INGESTION_ORIGIN__)" .-> AI
 
     CA -- "rediss:// (secretRef)<br/>レート制限カウンタ" --> REDIS
@@ -219,7 +219,7 @@ divelog/
 │       ├── containerAppsEnv.bicep     # Log Analytics + CA 環境 (VNet 統合対応)
 │       ├── containerApp.bicep         # Container Apps (Flask API)
 │       ├── staticWebApp.bicep         # Static Web Apps (Vue.js / Free)
-│       ├── staticWebAppConfig.bicep   # SWA appsettings (循環依存解消用)
+│       ├── staticWebAppLinkedBackend.bicep # SWA → Container Apps エッジプロキシ
 │       ├── cosmosDb.bicep             # Cosmos DB Serverless (publicNetworkAccess: Disabled)
 │       ├── cosmosRoleAssignment.bicep # Cosmos データプレーン RBAC 割り当て
 │       ├── functionApp.bicep          # Function App (Flex Consumption) + Storage + AppInsights
@@ -306,10 +306,10 @@ divelog/
     - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
     - `Content-Security-Policy`: 「**原則 `'self'` のみ**」という厳格ポリシー。CDN は使わず Bootstrap / Leaflet / leaflet.heat はすべて npm でバンドルする。許可される外部オリジンは以下のみ（`frontend/staticwebapp.config.json`）:
         - `img-src`: `'self' data: https://*.tile.openstreetmap.org`（OSM タイル）
-        - `connect-src`: `'self' __BACKEND_ORIGIN__ __APPINSIGHTS_INGESTION_ORIGIN__`。ビルド時に `frontend/scripts/process-swa-config.mjs` が `VITE_API_BASE_URL` と `VITE_APPINSIGHTS_CONNECTION_STRING` の `IngestionEndpoint` を抽出して `URL.origin` で置換する（デプロイ毎にスコープを最小化）
+        - `connect-src`: `'self' __APPINSIGHTS_INGESTION_ORIGIN__`。バックエンドへのリクエストは SWA Linked Backend を介した **同一オリジン** となるため、backend origin を `connect-src` に含める必要がない（CSP をさらに厳格化）。ビルド時に `frontend/scripts/process-swa-config.mjs` が `VITE_APPINSIGHTS_CONNECTION_STRING` の `IngestionEndpoint` を抽出して `URL.origin` で置換する
         - `style-src`: `'self' 'unsafe-inline'`（Bootstrap 互換のため inline style を許可）
         - `script-src`: `'self'` のみ
-- **不要な SWA ルーティング削除**: 以前 `staticwebapp.config.json` にあった `/api/*` 匿名アクセスルートは、API を Container Apps に離す以上不要（ローカルの Vite プロキシ、本番は `VITE_API_BASE_URL` で直接参照）のため削除
+- **SWA Linked Backend による同一オリジン化**: SPA は相対パス `/api/*` でバックエンドを叩き、SWA edge が Linked Backend として接続された Container Apps に転送する。これにより (1) ブラウザからは常に同一オリジン → CORS / プレフライト不要、(2) Container Apps Environment 再作成で FQDN サフィックスが変わっても SWA はリソース ID で接続しているためフロント再ビルド不要、(3) CSP `connect-src` を `'self'` だけに厳格化できる、という 3 重の効果がある
 - **コンテナ強化**: バックエンド Dockerfile は非 root (`USER 10001`) で実行。`HEALTHCHECK` を `/health` に対して構成。gunicorn の `--forwarded-allow-ips` は環境変数 `FORWARDED_ALLOW_IPS`（デフォルト `*`）経由で指定し、Container Apps Envoy フロントと整合（厳密にサイドカーの CIDR に絞りたい場合はこの env で上書き可能）
 - **ヒートマップ集計キャッシュ**: `/api/dives` の ヒートマップ / マーカー集計は全件スキャンを伴うため、認証済みリクエスト限定でプロセス内メモリにキャッシュ（TTL: `HEATMAP_CACHE_TTL_SECONDS`, デフォルト 60 秒）。連発リクエストによるスキャン負荷を抑制し、認証済み使い回しトークンでのコストストラングを緩和
 
@@ -344,7 +344,7 @@ main ブランチへの push で自動デプロイが実行されます。Azure 
 | ワークフロー | トリガーパス | 処理内容 |
 |---|---|---|
 | `deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 (OIDC) |
-| `deploy-frontend.yml` | `frontend/**` | Vite ビルド (`VITE_API_BASE_URL` 埋め込み) → Static Web Apps デプロイ |
+| `deploy-frontend.yml` | `frontend/**` | Vite ビルド（VITE_API_BASE_URL 不要 — SWA Linked Backend 経由のため相対パス `/api/*` で動作）→ Static Web Apps デプロイ |
 | `deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py` | Python パッケージのフラット配置 → Functions デプロイ (Oryx リモートビルド) |
 
 ### 認証方式
@@ -360,8 +360,7 @@ main ブランチへの push で自動デプロイが実行されます。Azure 
 | `AZURE_TENANT_ID` | Azure テナント ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID |
 | `SWA_DEPLOYMENT_TOKEN` | Static Web Apps のデプロイトークン |
-| `VITE_API_BASE_URL` | フロントから呼ぶバックエンド URL（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）。Vite ビルド時にバンドルへ埋め込まれる |
-| `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。`process-swa-config.mjs` が IngestionEndpoint を抽出して CSP `connect-src` に動的許可 |
+| `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。`process-swa-config.mjs` が IngestionEndpoint を抽出して CSP `connect-src` に動的許可。`VITE_API_BASE_URL` は **不要**（SWA Linked Backend で `/api/*` が Container Apps にエッジ転送されるため） |
 
 ### Functions デプロイの注意点（Flex Consumption）
 

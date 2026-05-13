@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "16951118744789246725"
+      "templateHash": "17514655231900665115"
     }
   },
   "parameters": {
@@ -58,6 +58,55 @@
       "metadata": {
         "description": "認証トークン署名用シークレットキー（Cosmos 未使用フォールバック用、通常は空）"
       }
+    },
+    "llmProvider": {
+      "type": "string",
+      "defaultValue": "openai",
+      "metadata": {
+        "description": "LLM プロバイダー（openai | azure_openai）"
+      }
+    },
+    "openaiApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OpenAI API Key"
+      }
+    },
+    "azureOpenaiEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI Endpoint"
+      }
+    },
+    "azureOpenaiApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI API Key"
+      }
+    },
+    "azureOpenaiDeployment": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI Deployment"
+      }
+    },
+    "azureOpenaiApiVersion": {
+      "type": "string",
+      "defaultValue": "2024-10-21",
+      "metadata": {
+        "description": "Azure OpenAI API Version"
+      }
+    },
+    "gpsDiffThresholdKm": {
+      "type": "int",
+      "defaultValue": 25,
+      "metadata": {
+        "description": "GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案する"
+      }
     }
   },
   "variables": {
@@ -67,7 +116,8 @@
     "backendName": "[format('ca-{0}', parameters('appName'))]",
     "funcName": "[format('func-{0}', parameters('appName'))]",
     "storageName": "[take(toLower(replace(format('st{0}{1}', parameters('appName'), uniqueString(resourceGroup().id)), '-', '')), 24)]",
-    "aiName": "[format('appi-{0}', parameters('appName'))]"
+    "aiName": "[format('appi-{0}', parameters('appName'))]",
+    "redisName": "[format('redis-{0}-{1}', parameters('appName'), take(uniqueString(resourceGroup().id), 6))]"
   },
   "resources": [
     {
@@ -158,6 +208,9 @@
           },
           "zxuContainerName": {
             "value": "zxu_uploads"
+          },
+          "locationKnowledgeContainerName": {
+            "value": "location_knowledge"
           }
         },
         "template": {
@@ -167,7 +220,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "16560551170228010859"
+              "templateHash": "7773827401338301238"
             }
           },
           "parameters": {
@@ -218,6 +271,20 @@
               "defaultValue": "zxu_uploads_leases",
               "metadata": {
                 "description": "ZXU Change Feed の Lease 用コンテナ名（Functions が利用）"
+              }
+            },
+            "divesLeasesContainerName": {
+              "type": "string",
+              "defaultValue": "dives_leases",
+              "metadata": {
+                "description": "dives Change Feed の Lease 用コンテナ名（Functions が utilize）"
+              }
+            },
+            "locationKnowledgeContainerName": {
+              "type": "string",
+              "defaultValue": "location_knowledge",
+              "metadata": {
+                "description": "ロケーション提案の承認/却下ナレッジ用コンテナ名"
               }
             }
           },
@@ -372,6 +439,44 @@
               "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), parameters('databaseName'))]"
               ]
+            },
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+              "apiVersion": "2024-05-15",
+              "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('databaseName'), parameters('divesLeasesContainerName'))]",
+              "properties": {
+                "resource": {
+                  "id": "[parameters('divesLeasesContainerName')]",
+                  "partitionKey": {
+                    "paths": [
+                      "/id"
+                    ],
+                    "kind": "Hash"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), parameters('databaseName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+              "apiVersion": "2024-05-15",
+              "name": "[format('{0}/{1}/{2}', parameters('accountName'), parameters('databaseName'), parameters('locationKnowledgeContainerName'))]",
+              "properties": {
+                "resource": {
+                  "id": "[parameters('locationKnowledgeContainerName')]",
+                  "partitionKey": {
+                    "paths": [
+                      "/id"
+                    ],
+                    "kind": "Hash"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), parameters('databaseName'))]"
+              ]
             }
           ],
           "outputs": {
@@ -399,9 +504,17 @@
               "type": "string",
               "value": "[parameters('zxuLeasesContainerName')]"
             },
+            "divesLeasesContainerName": {
+              "type": "string",
+              "value": "[parameters('divesLeasesContainerName')]"
+            },
             "divesContainerName": {
               "type": "string",
               "value": "[parameters('containerName')]"
+            },
+            "locationKnowledgeContainerName": {
+              "type": "string",
+              "value": "[parameters('locationKnowledgeContainerName')]"
             }
           }
         }
@@ -788,6 +901,85 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
+      "name": "redis",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[variables('redisName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "6303159001127763372"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cache/redis",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "Basic",
+                  "family": "C",
+                  "capacity": 0
+                },
+                "enableNonSslPort": false,
+                "minimumTlsVersion": "1.2",
+                "publicNetworkAccess": "Enabled",
+                "disableAccessKeyAuthentication": true,
+                "redisConfiguration": {
+                  "maxmemory-policy": "allkeys-lru",
+                  "aad-enabled": "true"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "hostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Cache/redis', parameters('name')), '2024-03-01').hostName]"
+            },
+            "sslPort": {
+              "type": "int",
+              "value": "[reference(resourceId('Microsoft.Cache/redis', parameters('name')), '2024-03-01').sslPort]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Cache/redis', parameters('name'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
       "name": "backend",
       "properties": {
         "expressionEvaluationOptions": {
@@ -831,8 +1023,44 @@
           "cosmosZxuContainerName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.zxuContainerName.value]"
           },
+          "cosmosLocationKnowledgeContainerName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.locationKnowledgeContainerName.value]"
+          },
           "secretKey": {
             "value": "[parameters('secretKey')]"
+          },
+          "appInsightsConnectionString": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'functions'), '2025-04-01').outputs.appInsightsConnectionString.value]"
+          },
+          "redisHostName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.hostName.value]"
+          },
+          "redisSslPort": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.sslPort.value]"
+          },
+          "tokenTtlSeconds": {
+            "value": 600
+          },
+          "llmProvider": {
+            "value": "[parameters('llmProvider')]"
+          },
+          "openaiApiKey": {
+            "value": "[parameters('openaiApiKey')]"
+          },
+          "azureOpenaiEndpoint": {
+            "value": "[parameters('azureOpenaiEndpoint')]"
+          },
+          "azureOpenaiApiKey": {
+            "value": "[parameters('azureOpenaiApiKey')]"
+          },
+          "azureOpenaiDeployment": {
+            "value": "[parameters('azureOpenaiDeployment')]"
+          },
+          "azureOpenaiApiVersion": {
+            "value": "[parameters('azureOpenaiApiVersion')]"
+          },
+          "gpsDiffThresholdKm": {
+            "value": "[parameters('gpsDiffThresholdKm')]"
           }
         },
         "template": {
@@ -842,7 +1070,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "5305399115144778891"
+              "templateHash": "5595246166189267215"
             }
           },
           "parameters": {
@@ -904,18 +1132,121 @@
                 "description": "ZXU 生データアップロード用コンテナ名"
               }
             },
+            "cosmosLocationKnowledgeContainerName": {
+              "type": "string",
+              "defaultValue": "location_knowledge",
+              "metadata": {
+                "description": "ロケーション承認ナレッジ用コンテナ名"
+              }
+            },
             "secretKey": {
               "type": "securestring",
               "defaultValue": "",
               "metadata": {
                 "description": "認証トークン署名用シークレットキー（Cosmos 未使用時のフォールバック用、通常は空でよい）"
               }
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Application Insights 接続文字列（省略時は App Insights 送信なし）"
+              }
+            },
+            "redisHostName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Redis ホスト名（レート制限共有ストア用）"
+              }
+            },
+            "redisSslPort": {
+              "type": "int",
+              "defaultValue": 6380,
+              "metadata": {
+                "description": "Redis SSL ポート"
+              }
+            },
+            "tokenTtlSeconds": {
+              "type": "int",
+              "defaultValue": 600,
+              "metadata": {
+                "description": "トークン TTL（秒）。Cosmos tokens コンテナの defaultTtl と一致させる。"
+              }
+            },
+            "llmProvider": {
+              "type": "string",
+              "defaultValue": "openai",
+              "metadata": {
+                "description": "LLM プロバイダー（openai | azure_openai）"
+              }
+            },
+            "openaiApiKey": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "OpenAI API Key（LLM_PROVIDER=openai の場合に使用）"
+              }
+            },
+            "azureOpenaiEndpoint": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Azure OpenAI Endpoint（LLM_PROVIDER=azure_openai の場合に使用）"
+              }
+            },
+            "azureOpenaiApiKey": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Azure OpenAI API Key"
+              }
+            },
+            "azureOpenaiDeployment": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Azure OpenAI Deployment 名"
+              }
+            },
+            "azureOpenaiApiVersion": {
+              "type": "string",
+              "defaultValue": "2024-10-21",
+              "metadata": {
+                "description": "Azure OpenAI API バージョン"
+              }
+            },
+            "gpsDiffThresholdKm": {
+              "type": "int",
+              "defaultValue": 25,
+              "metadata": {
+                "description": "GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案を返す"
+              }
             }
           },
           "variables": {
             "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+            "appInsightsEnv": "[if(not(empty(parameters('appInsightsConnectionString'))), createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', parameters('appInsightsConnectionString'))), createArray())]",
             "secretKeyEnv": "[if(not(empty(parameters('secretKey'))), createArray(createObject('name', 'SECRET_KEY', 'secretRef', 'secret-key')), createArray())]",
-            "containerSecrets": "[if(not(empty(parameters('secretKey'))), createArray(createObject('name', 'secret-key', 'value', parameters('secretKey'))), createArray())]"
+            "llmBaseEnv": [
+              {
+                "name": "LLM_PROVIDER",
+                "value": "[parameters('llmProvider')]"
+              }
+            ],
+            "llmOpenaiEnv": "[if(not(empty(parameters('openaiApiKey'))), createArray(createObject('name', 'OPENAI_API_KEY', 'secretRef', 'openai-api-key')), createArray())]",
+            "llmAzureBaseEnv": "[if(not(empty(parameters('azureOpenaiEndpoint'))), createArray(createObject('name', 'AZURE_OPENAI_ENDPOINT', 'value', parameters('azureOpenaiEndpoint')), createObject('name', 'AZURE_OPENAI_DEPLOYMENT', 'value', parameters('azureOpenaiDeployment')), createObject('name', 'AZURE_OPENAI_API_VERSION', 'value', parameters('azureOpenaiApiVersion'))), createArray())]",
+            "llmAzureKeyEnv": "[if(not(empty(parameters('azureOpenaiApiKey'))), createArray(createObject('name', 'AZURE_OPENAI_API_KEY', 'secretRef', 'azure-openai-api-key')), createArray())]",
+            "gpsDiffEnv": [
+              {
+                "name": "GPS_DIFF_THRESHOLD_KM",
+                "value": "[string(parameters('gpsDiffThresholdKm'))]"
+              }
+            ],
+            "baseSecrets": "[if(not(empty(parameters('secretKey'))), createArray(createObject('name', 'secret-key', 'value', parameters('secretKey'))), createArray())]",
+            "openaiSecrets": "[if(not(empty(parameters('openaiApiKey'))), createArray(createObject('name', 'openai-api-key', 'value', parameters('openaiApiKey'))), createArray())]",
+            "azureOpenaiSecrets": "[if(not(empty(parameters('azureOpenaiApiKey'))), createArray(createObject('name', 'azure-openai-api-key', 'value', parameters('azureOpenaiApiKey'))), createArray())]",
+            "containerSecrets": "[concat(variables('baseSecrets'), variables('openaiSecrets'), variables('azureOpenaiSecrets'))]"
           },
           "resources": [
             {
@@ -973,7 +1304,7 @@
                         "cpu": "[json('0.5')]",
                         "memory": "1Gi"
                       },
-                      "env": "[concat(createArray(createObject('name', 'PORT', 'value', '8000'), createObject('name', 'FLASK_DEBUG', 'value', 'false'), createObject('name', 'ALLOWED_ORIGINS', 'value', parameters('allowedOrigins')), createObject('name', 'COSMOS_ENDPOINT', 'value', parameters('cosmosEndpoint')), createObject('name', 'COSMOS_DATABASE', 'value', parameters('cosmosDatabaseName')), createObject('name', 'COSMOS_ZXU_CONTAINER', 'value', parameters('cosmosZxuContainerName')), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2023-01-31').clientId), createObject('name', 'TRUST_PROXY_HOPS', 'value', '1')), variables('secretKeyEnv'))]",
+                      "env": "[concat(createArray(createObject('name', 'PORT', 'value', '8000'), createObject('name', 'FLASK_DEBUG', 'value', 'false'), createObject('name', 'ALLOWED_ORIGINS', 'value', parameters('allowedOrigins')), createObject('name', 'COSMOS_ENDPOINT', 'value', parameters('cosmosEndpoint')), createObject('name', 'COSMOS_DATABASE', 'value', parameters('cosmosDatabaseName')), createObject('name', 'COSMOS_ZXU_CONTAINER', 'value', parameters('cosmosZxuContainerName')), createObject('name', 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER', 'value', parameters('cosmosLocationKnowledgeContainerName')), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2023-01-31').clientId), createObject('name', 'TRUST_PROXY_HOPS', 'value', '1'), createObject('name', 'TOKEN_TTL_SECONDS', 'value', string(parameters('tokenTtlSeconds')))), variables('appInsightsEnv'), variables('secretKeyEnv'), if(not(empty(parameters('redisHostName'))), createArray(createObject('name', 'RATELIMIT_STORAGE_URI', 'value', format('rediss://{0}:{1}/0?ssl_cert_reqs=required', parameters('redisHostName'), parameters('redisSslPort'))), createObject('name', 'REDIS_AAD_ENABLED', 'value', 'true'), createObject('name', 'AZURE_REDIS_USERNAME', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name'))), '2023-01-31').principalId)), createArray()), variables('llmBaseEnv'), variables('llmOpenaiEnv'), variables('llmAzureBaseEnv'), variables('llmAzureKeyEnv'), variables('gpsDiffEnv'))]",
                       "probes": [
                         {
                           "type": "Liveness",
@@ -1030,6 +1361,10 @@
             "uaMIId": {
               "type": "string",
               "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('name')))]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/containerApps', parameters('name'))]"
             }
           }
         }
@@ -1038,7 +1373,9 @@
         "[resourceId('Microsoft.Resources/deployments', 'acr')]",
         "[resourceId('Microsoft.Resources/deployments', 'ca-env')]",
         "[resourceId('Microsoft.Resources/deployments', 'cosmos')]",
-        "[resourceId('Microsoft.Resources/deployments', 'frontend')]"
+        "[resourceId('Microsoft.Resources/deployments', 'frontend')]",
+        "[resourceId('Microsoft.Resources/deployments', 'functions')]",
+        "[resourceId('Microsoft.Resources/deployments', 'redis')]"
       ]
     },
     {
@@ -1078,6 +1415,12 @@
           "cosmosDivesContainerName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.divesContainerName.value]"
           },
+          "cosmosDivesLeasesContainerName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.divesLeasesContainerName.value]"
+          },
+          "cosmosLocationKnowledgeContainerName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.locationKnowledgeContainerName.value]"
+          },
           "logAnalyticsWorkspaceId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'ca-env'), '2025-04-01').outputs.logAnalyticsWorkspaceId.value]"
           },
@@ -1092,7 +1435,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "2872422881612070175"
+              "templateHash": "3086460445824418955"
             }
           },
           "parameters": {
@@ -1121,6 +1464,12 @@
               "type": "string"
             },
             "cosmosDivesContainerName": {
+              "type": "string"
+            },
+            "cosmosDivesLeasesContainerName": {
+              "type": "string"
+            },
+            "cosmosLocationKnowledgeContainerName": {
               "type": "string"
             },
             "logAnalyticsWorkspaceId": {
@@ -1265,6 +1614,7 @@
               "properties": {
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('functionAppName')))]",
                 "httpsOnly": true,
+                "publicNetworkAccess": "Enabled",
                 "keyVaultReferenceIdentity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('functionAppName')))]",
                 "virtualNetworkSubnetId": "[parameters('functionSubnetId')]",
                 "vnetRouteAllEnabled": true,
@@ -1291,6 +1641,17 @@
                 "siteConfig": {
                   "minTlsVersion": "1.2",
                   "ftpsState": "Disabled",
+                  "ipSecurityRestrictionsDefaultAction": "Deny",
+                  "ipSecurityRestrictions": [
+                    {
+                      "ipAddress": "Any",
+                      "action": "Deny",
+                      "priority": 2147483647,
+                      "name": "Deny all"
+                    }
+                  ],
+                  "scmIpSecurityRestrictionsUseMain": false,
+                  "scmIpSecurityRestrictionsDefaultAction": "Allow",
                   "appSettings": [
                     {
                       "name": "AzureWebJobsStorage__accountName",
@@ -1337,6 +1698,14 @@
                       "value": "[parameters('cosmosZxuLeasesContainerName')]"
                     },
                     {
+                      "name": "COSMOS_DIVES_LEASES_CONTAINER",
+                      "value": "[parameters('cosmosDivesLeasesContainerName')]"
+                    },
+                    {
+                      "name": "COSMOS_LOCATION_KNOWLEDGE_CONTAINER",
+                      "value": "[parameters('cosmosLocationKnowledgeContainerName')]"
+                    },
+                    {
                       "name": "AZURE_CLIENT_ID",
                       "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('functionAppName'))), '2023-01-31').clientId]"
                     },
@@ -1374,6 +1743,10 @@
             "uaMIId": {
               "type": "string",
               "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('functionAppName')))]"
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
             }
           }
         }
@@ -1387,7 +1760,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "frontend-config",
+      "name": "frontend-linked-backend",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -1397,8 +1770,11 @@
           "staticWebAppName": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'frontend'), '2025-04-01').outputs.name.value]"
           },
-          "backendUrl": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'backend'), '2025-04-01').outputs.fqdn.value]"
+          "backendResourceId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'backend'), '2025-04-01').outputs.resourceId.value]"
+          },
+          "backendRegion": {
+            "value": "[parameters('location')]"
           }
         },
         "template": {
@@ -1408,27 +1784,46 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "2849067562822907573"
+              "templateHash": "14920231398862156560"
             }
           },
           "parameters": {
             "staticWebAppName": {
-              "type": "string"
+              "type": "string",
+              "metadata": {
+                "description": "Static Web Apps のリソース名"
+              }
             },
-            "backendUrl": {
-              "type": "string"
+            "backendResourceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Container App (バックエンド) のリソース ID"
+              }
+            },
+            "backendRegion": {
+              "type": "string",
+              "metadata": {
+                "description": "Container App のリージョン（linked backend 検証で使用）"
+              }
             }
           },
           "resources": [
             {
-              "type": "Microsoft.Web/staticSites/config",
+              "type": "Microsoft.Web/staticSites/linkedBackends",
               "apiVersion": "2023-12-01",
-              "name": "[format('{0}/{1}', parameters('staticWebAppName'), 'appsettings')]",
+              "name": "[format('{0}/{1}', parameters('staticWebAppName'), 'backend')]",
               "properties": {
-                "VITE_API_BASE_URL": "[parameters('backendUrl')]"
+                "backendResourceId": "[parameters('backendResourceId')]",
+                "region": "[parameters('backendRegion')]"
               }
             }
-          ]
+          ],
+          "outputs": {
+            "linkedBackendId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Web/staticSites/linkedBackends', parameters('staticWebAppName'), 'backend')]"
+            }
+          }
         }
       },
       "dependsOn": [
@@ -1579,6 +1974,159 @@
         "[resourceId('Microsoft.Resources/deployments', 'cosmos')]",
         "[resourceId('Microsoft.Resources/deployments', 'functions')]"
       ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cosmos-diagnostics",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "cosmosAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'cosmos'), '2025-04-01').outputs.accountName.value]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'ca-env'), '2025-04-01').outputs.logAnalyticsWorkspaceId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "12483959409631764943"
+            }
+          },
+          "parameters": {
+            "cosmosAccountName": {
+              "type": "string"
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName'))]",
+              "name": "cosmos-diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "category": "DataPlaneRequests",
+                    "enabled": true,
+                    "retentionPolicy": {
+                      "enabled": false,
+                      "days": 0
+                    }
+                  },
+                  {
+                    "category": "ControlPlaneRequests",
+                    "enabled": true,
+                    "retentionPolicy": {
+                      "enabled": false,
+                      "days": 0
+                    }
+                  }
+                ],
+                "metrics": []
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'ca-env')]",
+        "[resourceId('Microsoft.Resources/deployments', 'cosmos')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "redis-access-backend",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "redisName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.name.value]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'backend'), '2025-04-01').outputs.principalId.value]"
+          },
+          "principalAlias": {
+            "value": "[format('{0}-id', variables('backendName'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "8120797289926482842"
+            }
+          },
+          "parameters": {
+            "redisName": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure Cache for Redis のリソース名"
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "権限を付与するプリンシパル ID（UAMI の principalId / Entra User の objectId）"
+              }
+            },
+            "principalAlias": {
+              "type": "string",
+              "metadata": {
+                "description": "Redis 内での表示用エイリアス（管理用ラベル）"
+              }
+            },
+            "accessPolicyName": {
+              "type": "string",
+              "defaultValue": "Data Contributor",
+              "allowedValues": [
+                "Data Owner",
+                "Data Contributor",
+                "Data Reader"
+              ],
+              "metadata": {
+                "description": "ビルトインアクセスポリシー名"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cache/redis/accessPolicyAssignments",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/{1}', parameters('redisName'), guid(resourceId('Microsoft.Cache/redis', parameters('redisName')), parameters('principalId'), parameters('accessPolicyName')))]",
+              "properties": {
+                "accessPolicyName": "[parameters('accessPolicyName')]",
+                "objectId": "[parameters('principalId')]",
+                "objectIdAlias": "[parameters('principalAlias')]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'backend')]",
+        "[resourceId('Microsoft.Resources/deployments', 'redis')]"
+      ]
     }
   ],
   "outputs": {
@@ -1601,6 +2149,10 @@
     "functionAppName": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Resources/deployments', 'functions'), '2025-04-01').outputs.functionAppName.value]"
+    },
+    "redisHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'redis'), '2025-04-01').outputs.hostName.value]"
     }
   }
 }

@@ -1,10 +1,12 @@
 /**
  * バックエンド API クライアント
- * VITE_API_BASE_URL 未設定時はプロキシ経由 (開発) or 同一オリジン (本番) を使用
+ *
+ * URL は常に相対パス `/api/*` を使う：
+ *   - 本番: SWA Linked Backend が /api/* を Container Apps にエッジ転送するため同一オリジンとなり、
+ *           backend FQDN 変更や CORS を意識しなくてよい。
+ *   - 開発: vite.config.js の proxy 設定で /api → http://localhost:8000 に転送される。
  */
 import { useAuth } from '../composables/useAuth.js'
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 /**
  * 認証ヘッダーを付与した fetch ラッパー。
@@ -33,7 +35,7 @@ function apiFetch(url, options = {}) {
  * @returns {Promise<{dives, total, has_search, heatmap_data, markers_data}>}
  */
 export async function fetchDives(params = {}) {
-  const url = new URL(`${BASE_URL}/api/dives`, window.location.origin)
+  const url = new URL(`/api/dives`, window.location.origin)
   Object.entries(params).forEach(([k, v]) => {
     if (v) url.searchParams.set(k, v)
   })
@@ -56,7 +58,7 @@ export async function fetchDives(params = {}) {
 export async function uploadDive(file, opts = {}) {
   const formData = new FormData()
   formData.append('file', file)
-  const url = new URL(`${BASE_URL}/api/dives/upload`, window.location.origin)
+  const url = new URL(`/api/dives/upload`, window.location.origin)
   if (opts.applySuggestion) url.searchParams.set('apply_suggestion', 'true')
   if (opts.gpsOverrideLat != null) url.searchParams.set('gps_override_lat', String(opts.gpsOverrideLat))
   if (opts.gpsOverrideLon != null) url.searchParams.set('gps_override_lon', String(opts.gpsOverrideLon))
@@ -70,7 +72,7 @@ export async function uploadDive(file, opts = {}) {
 }
 
 export async function fetchUploadStatus(uploadId) {
-  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}`)
+  const res = await apiFetch(`/api/dives/uploads/${encodeURIComponent(uploadId)}`)
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
   return data
@@ -88,7 +90,7 @@ export async function confirmUpload(uploadId, { accept, suggestedLat, suggestedL
   const body = { accept: !!accept }
   if (suggestedLat != null) body.suggested_lat = suggestedLat
   if (suggestedLon != null) body.suggested_lon = suggestedLon
-  const res = await apiFetch(`${BASE_URL}/api/dives/uploads/${encodeURIComponent(uploadId)}/confirm`, {
+  const res = await apiFetch(`/api/dives/uploads/${encodeURIComponent(uploadId)}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -104,7 +106,7 @@ export async function confirmUpload(uploadId, { accept, suggestedLat, suggestedL
  * @returns {Promise<{dive, tags}>}
  */
 export async function fetchDive(diveId) {
-  const res = await apiFetch(`${BASE_URL}/api/dives/${encodeURIComponent(diveId)}`)
+  const res = await apiFetch(`/api/dives/${encodeURIComponent(diveId)}`)
   if (res.status === 404) throw new Error('NOT_FOUND')
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
