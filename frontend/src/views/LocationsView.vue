@@ -134,6 +134,7 @@ const editForm    = ref({ canonical_name: '', gps_lat: null, gps_lon: null })
 const saving      = ref(false)
 const editError   = ref(null)
 const editSuccess = ref(null)
+const GPS_PRECISION = 6
 
 // ── GPS 表示ヘルパー（knowledge があればそちらを優先）────────
 function displayLat(loc) {
@@ -250,8 +251,13 @@ function closeEdit() {
 }
 
 function setEditCoordinates(lat, lon) {
-  editForm.value.gps_lat = Number(lat.toFixed(6))
-  editForm.value.gps_lon = Number(lon.toFixed(6))
+  editForm.value.gps_lat = Number(lat.toFixed(GPS_PRECISION))
+  editForm.value.gps_lon = Number(lon.toFixed(GPS_PRECISION))
+}
+
+function onEditMarkerDragEnd() {
+  const { lat: markerLat, lng: markerLon } = editMarker.getLatLng()
+  setEditCoordinates(markerLat, markerLon)
 }
 
 function upsertEditMarker(lat, lon) {
@@ -259,10 +265,7 @@ function upsertEditMarker(lat, lon) {
   if (!L || !editLeafletMap) return
   if (!editMarker) {
     editMarker = L.marker([lat, lon], { draggable: true }).addTo(editLeafletMap)
-    editMarker.on('dragend', () => {
-      const { lat: markerLat, lng: markerLon } = editMarker.getLatLng()
-      setEditCoordinates(markerLat, markerLon)
-    })
+    editMarker.on('dragend', onEditMarkerDragEnd)
     return
   }
   editMarker.setLatLng([lat, lon])
@@ -309,6 +312,7 @@ function initEditMap() {
 
 function destroyEditMap() {
   if (editMarker && editLeafletMap) {
+    editMarker.off('dragend', onEditMarkerDragEnd)
     editLeafletMap.removeLayer(editMarker)
   }
   editMarker = null
