@@ -226,6 +226,3 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 output fqdn        string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output principalId string = uaMI.properties.principalId
 output uaMIId      string = uaMI.id
-// SWA linked backend から参照するためのリソース ID。FQDN ではなく ID で結ぶことで
-// Container Apps Environment 再作成等で FQDN サフィックスが変わってもリンクは維持される。
-output resourceId  string = containerApp.id

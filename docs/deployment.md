@@ -94,12 +94,17 @@ azd deploy backend
 
 ```bash
 cd frontend
+
+# VITE_API_BASE_URL を設定（バックエンドの URL）
+# ⮳ Vite のビルド時に静的に埋め込まれるため、SWA の appsettings ではなく
+#   ビルド時に環境変数として設定する必要がある
+export VITE_API_BASE_URL=https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io
 npm run build
 ```
 
-> **VITE_API_BASE_URL は不要です**。SWA Linked Backend（[infra/modules/staticWebAppLinkedBackend.bicep](../infra/modules/staticWebAppLinkedBackend.bicep)）が `/api/*` を Container Apps へエッジ転送するため、SPA は相対パス `/api/*` で動作します。バックエンド FQDN が変わってもフロントの再ビルドは不要です（SWA → backend はリソース ID で接続されているため）。
+> **Important**: `VITE_API_BASE_URL` は Vite のビルド時に JS ファイルにハードコードされます。SWA のアプリ設定で設定しても実行時には反映されません。バックエンド URL が変更された場合は再ビルド・再デプロイが必要です。
 
-> **CSP の動的生成**: `npm run build` は Vite ビルド後に `frontend/scripts/process-swa-config.mjs` を実行し、`staticwebapp.config.json` 内の `__APPINSIGHTS_INGESTION_ORIGIN__` プレースホルダを `VITE_APPINSIGHTS_CONNECTION_STRING` の `IngestionEndpoint` の `URL.origin` で置換した上で `dist/staticwebapp.config.json` を出力します。これにより CSP `connect-src` は `'self'`（SWA edge 自身）+ App Insights ingestion origin のみを許可します。バックエンド origin は `connect-src` に含めません（Linked Backend 経由で同一オリジンとなるため）。
+> **CSP の動的生成**: `npm run build` は Vite ビルド後に `frontend/scripts/process-swa-config.mjs` を実行し、`staticwebapp.config.json` 内の `__BACKEND_ORIGIN__` プレースホルダを `VITE_API_BASE_URL` の `URL.origin`（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）で置換した上で `dist/staticwebapp.config.json` を出力します。これにより CSP `connect-src` はそのデプロイのバックエンドオリジンのみを許可します（`*.azurecontainerapps.io` ワイルドカードより厳しいスコープ）。`VITE_API_BASE_URL` 未設定時は空文字列にフォールバックされ、同一オリジンのみ許可されます。
 
 ### Static Web Apps CLI でデプロイ
 
@@ -122,7 +127,7 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | ワークフロー | トリガーパス | 処理 |
 |---|---|---|
 | `.github/workflows/deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
-| `.github/workflows/deploy-frontend.yml` | `frontend/**` | Vite ビルド（VITE_API_BASE_URL 不要 — SWA Linked Backend 経由のため相対パス `/api/*` で動作）→ Static Web Apps デプロイ |
+| `.github/workflows/deploy-frontend.yml` | `frontend/**` | Vite ビルド (`VITE_API_BASE_URL` 埋め込み) → Static Web Apps デプロイ |
 | `.github/workflows/deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py` | フラット配置でステージ → Functions デプロイ（Oryx リモートビルド） |
 
 #### 必要な GitHub Secrets
@@ -133,9 +138,8 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | `AZURE_TENANT_ID` | Azure テナント ID | `az account show --query tenantId` |
 | `AZURE_SUBSCRIPTION_ID` | Azure サブスクリプション ID | `az account show --query id` |
 | `SWA_DEPLOYMENT_TOKEN` | SWA デプロイトークン | `az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query "properties.apiKey" -o tsv` |
+| `VITE_API_BASE_URL` | フロントが呼ぶバックエンド URL（Vite ビルド時に埋め込まれる） | `az containerapp show -n ca-divelog -g rg-divelogsite --query "properties.configuration.ingress.fqdn" -o tsv`を `https://` 付きで設定 |
 | `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。ビルド時に `process-swa-config.mjs` が `IngestionEndpoint=` を抽出し、CSP `connect-src` に `__APPINSIGHTS_INGESTION_ORIGIN__` として動的許可。未設定の場合はテレメトリ送信が CSP で遮断される点に注意 | Application Insights リソースの「接続文字列」をそのまま設定 |
-
-> **`VITE_API_BASE_URL` は不要です**。SWA Linked Backend （[infra/modules/staticWebAppLinkedBackend.bicep](../infra/modules/staticWebAppLinkedBackend.bicep)）が `/api/*` を Container Apps へエッジ転送するため、フロントは相対パスで動作します。Container Apps Environment を再作成しても SWA はリソース ID で backend と接続しているためリンクは維持される（Bicep 再適用は必要）。
 
 #### GPS 提案 LLM 用の GitHub Secrets / Variables
 
@@ -400,22 +404,20 @@ az containerapp show -n ca-divelog -g rg-divelogsite \
    ```
    `vnetSubnetId` が null の場合は Bicep を再デプロイし、`function-app-subnet` を統合してください。Application Insights の `AppTraces` に `Forbidden (403)` / `originated from IP ... through public internet` が出ている場合は VNet 統合未適用のサインです。
 
-### フロントエンドで `Failed to fetch` / 404 / 405 が出る
+### フロントエンドで `Failed to fetch` / 404 が出る
 
-SWA Linked Backend がリンクされていない、または backend が停止/再作成中の可能性があります。
+`VITE_API_BASE_URL` がビルド時に埋め込まれていない可能性があります。SWA の appsettings は Vite のビルドバンドルへは反映されないため、以下で介入します。
 
 ```bash
-# SWA に Container Apps が backend としてリンクされているか確認
-az staticwebapp backends show -n swa-divelog -g rg-divelogsite
-
-# 出力に Container App のリソース ID が表示されない場合は Bicep を再適用してリンクを張り直す
-az deployment group create -g rg-divelogsite -f infra/main.bicep -p infra/main.bicepparam
-
-# backend 単体の疎通確認（VNet 内からの直叩きはできないため、SWA 経由で叩く）
-curl https://swa-divelog.azurestaticapps.net/api/health
+export VITE_API_BASE_URL=https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io
+cd frontend && npm run build
+# 再デプロイ
+npx @azure/static-web-apps-cli deploy ./dist \
+  --deployment-token $(az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query properties.apiKey -o tsv) \
+  --env production
 ```
 
-> `VITE_API_BASE_URL` は **設定不要**。SPA は相対パス `/api/*` で動作するため、Container Apps の FQDN が変動してもフロント側の再ビルドは不要です。古い `VITE_API_BASE_URL` が残っているとそれが優先されるため、Repository secret に値が残っていれば **削除** してください。
+GitHub Actions を使う場合は Repository Secrets に `VITE_API_BASE_URL` を登録してください（`deploy-frontend.yml` が読み込みます）。
 
 ### CSS が崩れる / アイコンが表示されない
 

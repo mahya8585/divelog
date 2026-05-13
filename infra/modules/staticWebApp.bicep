@@ -1,10 +1,8 @@
 /*
   Azure Static Web Apps モジュール（フロントエンド Vue.js）
   - SKU: Free 固定
-  - バックエンド (Container Apps) は `staticWebAppLinkedBackend.bicep` で SWA edge にリンクする。
-    SPA は VITE_API_BASE_URL を持たず、ブラウザは相対パス `/api/*` を SWA に投げる。
-    SWA edge から backend へはリソース ID で接続するため、Container Apps Environment 再作成等で
-    FQDN サフィックスが変わってもリンクは維持される（恒久対応の核）。
+  - VITE_API_BASE_URL は別リソース (staticWebAppConfig.bicep) で設定する
+    （backend → swa の循環依存を避けるため、SWA を先に作成してから設定）
   - listSecrets による deployment token はセキュリティ上 output に出さない。
     必要時は az staticwebapp secrets list で取得すること。
 */

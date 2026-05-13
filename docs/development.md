@@ -136,9 +136,10 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 
 | 変数名 | 説明 |
 |---|---|
-| `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列（オプション）|
+| `VITE_API_BASE_URL` | バックエンド API の URL（例: `https://ca-divelog.<env-hash>.<region>.azurecontainerapps.io`）|
 
-> フロントとバックエンドの URL 関係は `vite.config.js` の proxy で解決します（開発も本番も SPA は相対パス `/api/*` を使う）。`VITE_API_BASE_URL` は設定不要です。
+> ローカル開発時は `VITE_API_BASE_URL` を設定不要です（Vite プロキシで `:8000` に転送）。  
+> 本番ビルド時は必ず環境変数として設定してください。`VITE_*` は Vite ビルド時に静的に埋め込まれるため、SWA の appsettings に設定しても実行時には反映されません。
 
 ---
 
