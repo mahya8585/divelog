@@ -48,6 +48,29 @@ jobs:
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+      # SECRET_KEY を Container App の secret として同期する。
+      #   - backend/app.py は SECRET_KEY 未設定だと fail-start するため、本番では必須。
+      #   - GitHub Secrets `SECRET_KEY` を一度設定すれば、以降の Bicep 再デプロイで secret が
+      #     消えても本ステップで復元される。値は `python -c "import secrets; print(secrets.token_urlsafe(64))"`
+      #     で生成した固定値を使用すること（値を変えると既存ログインセッションが全て失効する）。
+      - name: Sync SECRET_KEY on Container App
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        run: |
+          set -e
+          if [ -z "$SECRET_KEY" ]; then
+            echo "WARN: GitHub Secrets SECRET_KEY が未設定です。Container App 既存の secret を維持します。"
+            exit 0
+          fi
+          az containerapp secret set \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --secrets "secret-key=$SECRET_KEY"
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --set-env-vars "SECRET_KEY=secretref:secret-key"
+
       # GPS 提案 LLM の secrets / 環境変数を更新（Bicep を再実行せず CI から差し替え可能にする）
       # 実行条件:
       #   - LLM_PROVIDER=openai          → secrets.OPENAI_API_KEY が必須

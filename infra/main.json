@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "15353065705198502170"
+      "templateHash": "14788418315778045175"
     }
   },
   "parameters": {
@@ -99,6 +99,13 @@
       "defaultValue": 25,
       "metadata": {
         "description": "GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案する"
+      }
+    },
+    "githubActionsPrincipalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "GitHub Actions が OIDC ログインに使う Service Principal の Object ID。Functions の Flex Consumption デプロイ時に Storage Blob Data Contributor を付与する。未指定なら付与しない（既に手動付与済みの場合など）"
       }
     }
   },
@@ -1403,6 +1410,9 @@
           },
           "functionSubnetId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.fnSubnetId.value]"
+          },
+          "githubActionsPrincipalId": {
+            "value": "[parameters('githubActionsPrincipalId')]"
           }
         },
         "template": {
@@ -1412,7 +1422,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "3086460445824418955"
+              "templateHash": "16360460268511126523"
             }
           },
           "parameters": {
@@ -1454,12 +1464,20 @@
             },
             "functionSubnetId": {
               "type": "string"
+            },
+            "githubActionsPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "GitHub Actions が OIDC ログインに使う Service Principal の Object ID（principalId）。Flex Consumption の ZIP デプロイで app-package コンテナへの Blob 書き込みに使用。未指定なら割り当てを行わない"
+              }
             }
           },
           "variables": {
             "storageBlobDataOwnerRoleId": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b",
             "storageQueueDataContribRoleId": "974c5e8b-45b9-4653-ba55-5f855dd0fb88",
-            "storageTableDataContribRoleId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
+            "storageTableDataContribRoleId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
+            "storageBlobDataContribRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
           },
           "resources": [
             {
@@ -1560,6 +1578,21 @@
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
                 "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-id', parameters('functionAppName')))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('githubActionsPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('githubActionsPrincipalId'), variables('storageBlobDataContribRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContribRoleId'))]",
+                "principalId": "[parameters('githubActionsPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
               ]
             },
             {

@@ -21,6 +21,9 @@ param cosmosLocationKnowledgeContainerName string
 param logAnalyticsWorkspaceId string
 param functionSubnetId string
 
+@description('GitHub Actions が OIDC ログインに使う Service Principal の Object ID（principalId）。Flex Consumption の ZIP デプロイで app-package コンテナへの Blob 書き込みに使用。未指定なら割り当てを行わない')
+param githubActionsPrincipalId string = ''
+
 // ── Storage (AzureWebJobsStorage 用) ─────────────────────
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
@@ -102,6 +105,22 @@ resource storageTableAssignment 'Microsoft.Authorization/roleAssignments@2022-04
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContribRoleId)
     principalId: uaMI.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ── GitHub Actions OIDC SP への Storage Blob Data Contributor ───────────
+// Flex Consumption の Kudu `/api/publish` は呼び出し元クレデンシャル（GitHub Actions SP）で
+// app-package コンテナへ ZIP をアップロードする。Storage は allowSharedKeyAccess=false の
+// ため OAuth が必須となり、SP に Blob 書き込み RBAC が無いと 403 でデプロイが失敗する。
+var storageBlobDataContribRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource ghActionsStorageBlobContrib 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(githubActionsPrincipalId)) {
+  scope: storage
+  name: guid(storage.id, githubActionsPrincipalId, storageBlobDataContribRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContribRoleId)
+    principalId: githubActionsPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

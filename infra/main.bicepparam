@@ -43,3 +43,21 @@ param azureOpenaiApiVersion = '2025-01-01-preview'
 // API キーは設定しない（Managed Identity 経由で AAD トークン取得）。
 // azureOpenaiApiKey パラメータ自体を main.bicep から削除済みのため指定不可。
 // param openaiApiKey         = ''
+
+// ── GitHub Actions OIDC SP の Object ID ───────────────────
+// Functions の Flex Consumption デプロイで app-package Blob コンテナへ ZIP を
+// アップロードするために、デプロイで使う Service Principal に Storage Blob Data
+// Contributor を付与する。デプロイ前に環境変数 GITHUB_ACTIONS_PRINCIPAL_ID に
+// SP の Object ID を設定すること（取得: az ad sp show --id $env:AZURE_CLIENT_ID --query id -o tsv）。
+// 未設定の場合は付与をスキップ（既に手動で付与済みの場合など）。
+param githubActionsPrincipalId = readEnvironmentVariable('GITHUB_ACTIONS_PRINCIPAL_ID', '')
+
+// ── SECRET_KEY（トークン署名用） ──────────────────────────
+// backend/app.py は SECRET_KEY 未設定だと fail-start する。
+// 環境変数 SECRET_KEY をデプロイ前に設定すると、Bicep 経由で Container App の
+// secret-key に同期される（CI からは deploy-backend.yml の Sync SECRET_KEY ステップ
+// で GitHub Secrets `SECRET_KEY` から同様に同期される）。
+// 未設定の場合は空のまま渡し、Container App 既存の secret を維持する（Bicep の
+// containerApp.bicep 側で secretKey が空なら secret 配列を空にするため、
+// 必ず CI または手動の `az containerapp secret set` で別途設定すること）。
+param secretKey = readEnvironmentVariable('SECRET_KEY', '')

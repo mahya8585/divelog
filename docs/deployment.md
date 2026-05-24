@@ -77,6 +77,17 @@ param backendImage = 'acrdivelog.azurecr.io/backend:latest'
 再デプロイ:
 
 ```bash
+# ⚠️ Bicep を手動デプロイする際は必ず SECRET_KEY を環境変数で渡すこと。
+#    渡し忘れると Container App の secret-key が消え、SECRET_KEY fail-start で
+#    全レプリカが起動不能になる（→ docs/troubleshooting.md「Bicep 再デプロイで
+#    Container App の SECRET_KEY が消えてログイン全滅」参照）。
+export SECRET_KEY=$(az containerapp secret show -g rg-divelogsite -n ca-divelog \
+  --secret-name secret-key --query value -o tsv)
+# GitHub Secrets と同じ値を使う場合は手元の値を直接エクスポートする。
+# 同様に Functions の Storage RBAC 用に SP の Object ID も渡す。
+export GITHUB_ACTIONS_PRINCIPAL_ID=$(az ad sp show \
+  --id $AZURE_CLIENT_ID --query id -o tsv)
+
 az deployment group create \
   -g rg-divelogsite \
   -f infra/main.bicep \
@@ -140,6 +151,7 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | `SWA_DEPLOYMENT_TOKEN` | SWA デプロイトークン | `az staticwebapp secrets list -n swa-divelog -g rg-divelogsite --query "properties.apiKey" -o tsv` |
 | `VITE_API_BASE_URL` | フロントが呼ぶバックエンド URL（Vite ビルド時に埋め込まれる） | `az containerapp show -n ca-divelog -g rg-divelogsite --query "properties.configuration.ingress.fqdn" -o tsv`を `https://` 付きで設定 |
 | `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。ビルド時に `process-swa-config.mjs` が `IngestionEndpoint=` を抽出し、CSP `connect-src` に `__APPINSIGHTS_INGESTION_ORIGIN__` として動的許可。未設定の場合はテレメトリ送信が CSP で遮断される点に注意 | Application Insights リソースの「接続文字列」をそのまま設定 |
+| `SECRET_KEY` | バックエンドのトークン署名キー（必須）。値が変わると既存ログインセッションが全て失効する | `python -c "import secrets; print(secrets.token_urlsafe(64))"` で生成し、固定値として保存。`deploy-backend.yml` の `Sync SECRET_KEY on Container App` ステップが Container App secret `secret-key` に同期する |
 
 #### GPS 提案 LLM 用の GitHub Secrets / Variables
 
@@ -206,6 +218,20 @@ az ad app federated-credential create --id <appId> --parameters '{
   "subject": "repo:<owner>/<repo>:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
+
+# 5. Functions の Flex Consumption ZIP デプロイで必要な Storage への Blob 書き込み権限を付与
+#    Storage は allowSharedKeyAccess=false のため OAuth (RBAC) 経由でしかアクセスできない。
+#    `Azure/functions-action@v1` は呼び出し元クレデンシャル（=このサービスプリンシパル）で
+#    app-package コンテナへ ZIP をアップロードするため、SP に Storage Blob Data Contributor を付与する。
+#    （`infra/main.bicep` の `githubActionsPrincipalId` パラメータに同じ SP の Object ID を
+#     設定して `az deployment group create` すれば自動付与される。）
+spOid=$(az ad sp show --id <appId> --query id -o tsv)
+stId=$(az storage account list -g rg-divelogsite --query "[?starts_with(name, 'stdivelog')].id" -o tsv)
+az role assignment create \
+  --assignee-object-id $spOid \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Contributor" \
+  --scope $stId
 ```
 
 ---

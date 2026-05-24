@@ -12,7 +12,98 @@
 
 ---
 
-## 2026-05-12 (さらに後刻): SWA 経由ログインが 405 Method Not Allowed で失敗
+## 2026-05-24 (後刻): Bicep 再デプロイで Container App の SECRET_KEY が消えてログイン全滅
+
+### 日付
+
+2026-05-24
+
+### 事象
+
+Functions 用の Storage RBAC を追加するために `az deployment group create` で Bicep を再デプロイした直後、本番フロントエンドからログインしようとすると常に「ログインに失敗しました」が出るようになった。
+
+`az containerapp logs show -g rg-divelogsite -n ca-divelog` で確認すると、gunicorn の worker 起動時に以下で失敗していた：
+
+```
+RuntimeError: SECRET_KEY が未設定です。本番モードでは必須です。
+[ERROR] Worker (pid:8) exited with code 3.
+gunicorn.errors.HaltServer: <HaltServer 'Worker failed to boot.' 3>
+```
+
+### 原因
+
+1. セキュリティ修正で `backend/app.py` に `SECRET_KEY` 必須の fail-start ガードを追加していた（`FLASK_DEBUG=true` 以外で未設定なら起動拒否）。
+2. `infra/main.bicepparam` の `secretKey` パラメータが空文字のまま運用されていた。
+3. `infra/modules/containerApp.bicep` は `secretKey` が空のとき `secrets: []` を渡すロジックになっており、Bicep の増分デプロイで Container App 既存の `secret-key` が**削除**された。
+4. 結果として SECRET_KEY 環境変数の secretRef 参照先が消え、コンテナ起動時に fail-start。フロント側からは API がすべて応答しないためログイン不能に。
+
+### 修正対応
+
+1. ローカルで安全なランダム値を生成 (`python -c "import secrets; print(secrets.token_urlsafe(64))"`)。
+2. `az containerapp secret set -g rg-divelogsite -n ca-divelog --secrets "secret-key=<value>"` で secret を復元。
+3. `az containerapp update --set-env-vars "SECRET_KEY=secretref:secret-key"` で env を再バインド。
+4. 新リビジョン `ca-divelog--0000019` が `Running` で起動し復旧。
+5. 生成した値を GitHub Secrets `SECRET_KEY` に保存（次回以降 CI 経由で自動同期するため）。
+
+### 長期修正計画とその進捗
+
+- ✅ `.github/workflows/deploy-backend.yml` に「Sync SECRET_KEY on Container App」ステップを追加。GitHub Secrets `SECRET_KEY` が設定されていれば、`az containerapp secret set` + `--set-env-vars SECRET_KEY=secretref:secret-key` を毎回実行して状態を確実にする。
+- ✅ `infra/main.bicepparam` を `param secretKey = readEnvironmentVariable('SECRET_KEY', '')` に変更。CI / ローカルから `$env:SECRET_KEY` を設定して `az deployment group create` すれば、Bicep デプロイ経路でも secret-key が維持される。
+- ⚠️ Bicep をローカルから手動デプロイする際は **必ず `$env:SECRET_KEY` を設定してから** 実行すること。`docs/deployment.md` の「Container App デプロイ」節と「OIDC 認証のセットアップ」節に明記済み。
+- 今後 SECRET_KEY をローテーションする場合は、GitHub Secrets を更新 → `deploy-backend.yml` を `workflow_dispatch` で再実行 すれば全レプリカに反映される（ただし旧 SECRET_KEY で署名された既存トークンは全て失効するためユーザーは再ログインが必要）。
+
+---
+
+
+
+### 日付
+
+2026-05-24
+
+### 事象
+
+`Deploy Functions` ワークフロー（`Azure/functions-action@v1`）が次のエラーで失敗：
+
+```
+[StorageAccessibleCheck] Error while checking access to storage account using Kudu.Legion.Core.Storage.BlobContainerStorage:
+BlobUploadFailedException: Failed to upload blob to storage account:
+Response status code does not indicate success: 403 (This request is not authorized to perform this operation.).
+InaccessibleStorageException: Failed to access storage account for deployment: ...
+Error: Failed to deploy web package to Function App.
+```
+
+### 原因
+
+Flex Consumption の ZIP デプロイは `app-package` Blob コンテナに ZIP を書き込むが、対象 Storage は `allowSharedKeyAccess: false`（Shared Key 認証禁止）のため OAuth (RBAC) が必須。`Azure/functions-action@v1` は **GitHub Actions OIDC でログインしたサービスプリンシパル（`AZURE_CLIENT_ID`）** を使って Kudu の `/api/publish` → Storage へアップロードするが、その SP に Storage Blob 書き込みロールが付与されていなかったため 403。
+
+Function App の UAMI には `Storage Blob Data Owner` が付与済みだが、デプロイ実行主体は UAMI ではなく GitHub Actions SP のため別途付与が必要。
+
+### 修正対応
+
+GitHub Actions OIDC SP の Object ID を取得し、Functions の Storage アカウントに `Storage Blob Data Contributor` を付与：
+
+```powershell
+$spOid = az ad sp show --id $env:AZURE_CLIENT_ID --query id -o tsv
+$stId  = az storage account list -g rg-divelogsite --query "[?starts_with(name, 'stdivelog')].id" -o tsv
+az role assignment create `
+  --assignee-object-id $spOid `
+  --assignee-principal-type ServicePrincipal `
+  --role "Storage Blob Data Contributor" `
+  --scope $stId
+```
+
+ロール伝播後、`Deploy Functions` ワークフローを再実行して成功を確認。
+
+### 長期修正計画とその進捗
+
+- ✅ `infra/modules/functionApp.bicep` に `githubActionsPrincipalId` パラメータと条件付き role assignment を追加し、Bicep デプロイ時に自動付与されるようにした。
+- ✅ `infra/main.bicepparam` で `readEnvironmentVariable('GITHUB_ACTIONS_PRINCIPAL_ID', '')` 経由で受け取る形に統一。
+- ✅ `docs/deployment.md` の OIDC セットアップ手順に Storage Blob Data Contributor 付与ステップを追記。
+- 今後 SP / OIDC 設定を作り直す際は、Bicep デプロイの環境変数に `GITHUB_ACTIONS_PRINCIPAL_ID` を設定するだけで再現可能。
+
+---
+
+
 
 ### 日付
 

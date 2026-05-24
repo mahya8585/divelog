@@ -59,6 +59,9 @@ param azureOpenaiApiVersion string = '2024-10-21'
 @description('GPS 提案差分しきい値（km）。現 GPS と LLM 提案がこの距離以上離れている場合のみ提案する')
 param gpsDiffThresholdKm int = 25
 
+@description('GitHub Actions が OIDC ログインに使う Service Principal の Object ID。Functions の Flex Consumption デプロイ時に Storage Blob Data Contributor を付与する。未指定なら付与しない（既に手動付与済みの場合など）')
+param githubActionsPrincipalId string = ''
+
 // ── 変数 ───────────────────────────────────────────────────
 var acrName     = replace('acr${appName}', '-', '')
 var vnetName    = 'vnet-${appName}'
@@ -182,6 +185,7 @@ module functions 'modules/functionApp.bicep' = {
     cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
     logAnalyticsWorkspaceId     : caEnv.outputs.logAnalyticsWorkspaceId
     functionSubnetId            : network.outputs.fnSubnetId
+    githubActionsPrincipalId    : githubActionsPrincipalId
   }
 }
 
