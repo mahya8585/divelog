@@ -120,14 +120,16 @@ def _sanitize(text: str | None, max_len: int = 200) -> str:
 def _build_openai_client(timeout: float):
     """OpenAI / Azure OpenAI の同期クライアントを返す。
 
-    Azure OpenAI は以下の優先順位で認証する:
-      1. `AZURE_OPENAI_API_KEY` が設定されていれば API キー認証
-      2. それ以外は Managed Identity (DefaultAzureCredential) を使った
-         Azure AD トークン認証
-         - Container Apps では `AZURE_CLIENT_ID`（ユーザー割り当て MI）を
-           DefaultAzureCredential が拾う
-         - 事前に対象 Azure OpenAI リソースで MI に
-           「Cognitive Services OpenAI User」ロールを付与しておくこと
+    Azure OpenAI は Managed Identity (DefaultAzureCredential) を使った
+    Azure AD トークン認証のみをサポートする:
+      - Container Apps では `AZURE_CLIENT_ID`（ユーザー割り当て MI）を
+        DefaultAzureCredential が拾う
+      - 事前に対象 Azure OpenAI / AI Services リソースで MI に
+        「Cognitive Services OpenAI User」ロールを付与しておくこと
+      - リソース側で `disableLocalAuth: true` を強制している前提のため、
+        API キー認証経路は意図的にサポートしない。
+
+    OpenAI (provider=openai) は API キー認証を使う（純粋な OpenAI 側に MI 認証は存在しない）。
     """
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
     if provider == "azure_openai":
@@ -136,15 +138,7 @@ def _build_openai_client(timeout: float):
         api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
         if not endpoint:
             return None
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-        if api_key:
-            return AzureOpenAI(
-                azure_endpoint=endpoint,
-                api_key=api_key,
-                api_version=api_version,
-                timeout=timeout,
-            )
-        # API キーが無い場合は Managed Identity / Azure AD でトークン取得
+        # Managed Identity / Azure AD でトークン取得（キー認証は廃止）
         try:
             from azure.identity import DefaultAzureCredential, get_bearer_token_provider  # type: ignore
         except ImportError:
@@ -217,8 +211,12 @@ def resolve_gps_from_name(
     name: str,
     knowledge_lookup: Callable[[str], dict | None] | None = None,
     rag_search: Callable[[str, int], list[dict]] | None = None,
+    owner_email: str | None = None,
 ) -> dict | None:
     """ロケーション名から GPS 提案を返す。失敗時は None。
+
+    owner_email を渡すと、ナレッジ参照（完全一致 / RAG）を所有者スコープに限定する。
+    他オーナーが先に登録した GPS が「LLM 提案」として漏洩する経路を塞ぐ（IDOR 対策）。
 
     Returns: {"lat", "lon", "confidence", "source", "place_canonical"} | None
     """
@@ -229,8 +227,10 @@ def resolve_gps_from_name(
     # 1) ナレッジ完全一致
     try:
         if knowledge_lookup is None:
-            from .location_knowledge import lookup_by_name as knowledge_lookup  # type: ignore
-        hit = knowledge_lookup(safe_name)
+            from .location_knowledge import lookup_by_name as _lookup  # type: ignore
+            hit = _lookup(safe_name, owner_email=owner_email)
+        else:
+            hit = knowledge_lookup(safe_name)
         if hit:
             sug = _knowledge_to_suggestion(hit)
             if sug:
@@ -247,8 +247,10 @@ def resolve_gps_from_name(
         return None
     try:
         if rag_search is None:
-            from .location_knowledge import search_similar as rag_search  # type: ignore
-        rag_items = rag_search(safe_name, bundle.rag_top_k) or []
+            from .location_knowledge import search_similar as _search  # type: ignore
+            rag_items = _search(safe_name, bundle.rag_top_k, owner_email=owner_email) or []
+        else:
+            rag_items = rag_search(safe_name, bundle.rag_top_k) or []
     except Exception:
         _logger.exception("rag_search 失敗")
         rag_items = []

@@ -192,8 +192,20 @@ limiter = Limiter(
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 # ── 認証設定 ──────────────────────────────────────────────
+# FLASK_DEBUG はセキュリティ判定（SECRET_KEY / AUTH_DISABLED）でも参照するため、
+# 認証関連の他フラグより先に確定させる。
+_FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "").lower() == "true"
+
 _SECRET_KEY = os.environ.get("SECRET_KEY")
 if not _SECRET_KEY:
+    if not _FLASK_DEBUG:
+        # 本番モードで SECRET_KEY 未設定は fail-start。
+        # Cosmos 障害時等に署名トークン経路へフォールバックしたとき
+        # レプリカ間で署名鍵が一致せずセッションが全消去になるのを防ぐ。
+        raise RuntimeError(
+            "SECRET_KEY が未設定です。本番モードでは必須です。"
+            "FLASK_DEBUG=true で起動するか SECRET_KEY を設定してください。"
+        )
     _SECRET_KEY = os.urandom(32).hex()
     import warnings
     warnings.warn(
@@ -208,7 +220,6 @@ _AUTH_EMAIL = os.environ.get("AUTH_EMAIL", "")
 _AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
 # 認証スキップを許可する明示フラグ（誤設定でのバイパスを防ぐ）。
 # 本番環境（FLASK_DEBUG ≠ true）では設定されていても無視し、起動時に警告する。
-_FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "").lower() == "true"
 _AUTH_DISABLED_RAW = os.environ.get("AUTH_DISABLED", "").lower() == "true"
 if _AUTH_DISABLED_RAW and not _FLASK_DEBUG:
     import warnings
@@ -294,13 +305,17 @@ else:
 # ── ヒートマップ TTL キャッシュ ─────────────────────────
 # 全件 load_all_dives() を毎リクエスト走らせると Cosmos の RU 消費・
 # 経済的 DoS につながるため、短時間だけメモリキャッシュする。
+# キャッシュはオーナー (owner_email) 単位で分離する。
+# 全ユーザー横断のキャッシュは他ユーザーのダイビング地点情報を露出する IDOR / 情報漏洩経路となるため厳禁。
 _HEATMAP_CACHE_TTL = int(os.environ.get("HEATMAP_CACHE_TTL_SECONDS", "60"))
+_HEATMAP_CACHE_MAX_OWNERS = int(os.environ.get("HEATMAP_CACHE_MAX_OWNERS", "256"))
 _heatmap_cache_lock = threading.Lock()
-_heatmap_cache: dict = {"expires_at": 0.0, "heatmap": [], "markers": []}
+# owner_email -> {"expires_at": float, "heatmap": list, "markers": list}
+_heatmap_cache_by_owner: dict[str, dict] = {}
 
 
-def _build_heatmap() -> tuple[list, list]:
-    all_dives = load_all_dives()
+def _build_heatmap(owner_email: str | None) -> tuple[list, list]:
+    all_dives = load_all_dives(owner_email=owner_email)
     loc_counter: Counter = Counter()
     loc_info: dict = {}
     for d in all_dives:
@@ -322,17 +337,32 @@ def _build_heatmap() -> tuple[list, list]:
     return heatmap, markers
 
 
-def _get_heatmap_cached() -> tuple[list, list]:
+def _get_heatmap_cached(owner_email: str | None) -> tuple[list, list]:
+    """owner_email スコープでヒートマップを TTL キャッシュする。"""
+    cache_key = owner_email or ""
     now = time.time()
     with _heatmap_cache_lock:
-        if now < _heatmap_cache["expires_at"]:
-            return _heatmap_cache["heatmap"], _heatmap_cache["markers"]
+        entry = _heatmap_cache_by_owner.get(cache_key)
+        if entry and now < entry["expires_at"]:
+            return entry["heatmap"], entry["markers"]
     # キャッシュ外でビルド（ロック保持時間を短くする）
-    heatmap, markers = _build_heatmap()
+    heatmap, markers = _build_heatmap(owner_email)
     with _heatmap_cache_lock:
-        _heatmap_cache["heatmap"] = heatmap
-        _heatmap_cache["markers"] = markers
-        _heatmap_cache["expires_at"] = time.time() + _HEATMAP_CACHE_TTL
+        # キャッシュエントリ上限（メモリ DoS 緩和）
+        if len(_heatmap_cache_by_owner) >= _HEATMAP_CACHE_MAX_OWNERS and cache_key not in _heatmap_cache_by_owner:
+            # 期限切れエントリを削除。残らない場合は最も古いものを削除。
+            now2 = time.time()
+            expired = [k for k, v in _heatmap_cache_by_owner.items() if v["expires_at"] < now2]
+            for k in expired:
+                _heatmap_cache_by_owner.pop(k, None)
+            if len(_heatmap_cache_by_owner) >= _HEATMAP_CACHE_MAX_OWNERS:
+                oldest = min(_heatmap_cache_by_owner.items(), key=lambda kv: kv[1]["expires_at"])[0]
+                _heatmap_cache_by_owner.pop(oldest, None)
+        _heatmap_cache_by_owner[cache_key] = {
+            "heatmap": heatmap,
+            "markers": markers,
+            "expires_at": time.time() + _HEATMAP_CACHE_TTL,
+        }
     return heatmap, markers
 
 
@@ -375,7 +405,8 @@ def login():
         return jsonify({"token": token})
 
     # ローカル開発フォールバック
-    if not _AUTH_EMAIL:
+    # AUTH_EMAIL / AUTH_PASSWORD の両方が設定されていなければログイン不可（空パスワード受理を防ぐ）。
+    if not _AUTH_EMAIL or not _AUTH_PASSWORD:
         return jsonify({"error": "認証が設定されていません"}), 500
     try:
         email_ok    = hmac.compare_digest(email.encode("utf-8"),    _AUTH_EMAIL.encode("utf-8"))
@@ -425,8 +456,9 @@ def get_dives():
         else load_all_dives(owner_email=owner)
     )
 
-    # ヒートマップ・マーカー用データ（全件集計）は TTL キャッシュで RU 消費と DoS 增幅を抑制
-    heatmap_data, markers_data = _get_heatmap_cached()
+    # ヒートマップ・マーカー用データ（自ユーザー全件集計）は TTL キャッシュで RU 消費と DoS 增幅を抑制。
+    # owner_email スコープを必ず渡して他ユーザーの座標漏洩を防止する（IDOR 対策）。
+    heatmap_data, markers_data = _get_heatmap_cached(owner)
 
     return jsonify({
         "dives": dives,
@@ -484,7 +516,9 @@ def upload_dive():
         suggestion = None
         if loc_name and _resolve_gps is not None and _should_suggest is not None:
             try:
-                suggestion = _resolve_gps(loc_name)
+                # owner_email スコープでナレッジ参照を限定し、他オーナーの GPS が
+                # 「LLM 提案」として漏れる経路を塞ぐ。
+                suggestion = _resolve_gps(loc_name, owner_email=owner)
             except Exception:
                 app.logger.exception("LLM 提案の生成に失敗（無視して継続）")
                 suggestion = None
@@ -639,9 +673,13 @@ def confirm_upload(upload_id: str):
             return jsonify({"error": "保存された GPS 提案が範囲外です"}), 400
         gps_override = {"lat": f_lat, "lon": f_lon}
 
+    # accept=false の場合は提案を採用せずに登録するため、ステータスは "rejected" にする。
+    # Functions 側は ("uploaded", "confirmed") のみ処理対象とするため、
+    # rejected はそのままユーザ確認済みとして残し、登録 dive は作成しない。
+    new_status = "confirmed" if accept else "rejected"
     updated = update_zxu_upload(
         upload_id,
-        status="confirmed",
+        status=new_status,
         gps_override=gps_override,
         owner_email=owner,
     )
@@ -649,7 +687,7 @@ def confirm_upload(upload_id: str):
         return jsonify({"error": "更新に失敗しました"}), 404
     return jsonify({
         "upload_id": upload_id,
-        "status": "confirmed",
+        "status": new_status,
         "gps_override": gps_override,
     }), 200
 

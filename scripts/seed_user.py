@@ -6,7 +6,7 @@ Container App / Function App の環境変数に AUTH_PASSWORD を常駐させな
 
 前提:
   - 実行ユーザーが Cosmos DB の "Cosmos DB Built-in Data Contributor" ロールを保有していること
-    （または COSMOS_KEY を一時的に環境変数で渡す）
+    （`disableLocalAuth: true` のため API キー認証は使用不可）
   - COSMOS_ENDPOINT が解決可能であること（プライベートエンドポイント環境では VNet 内から実行）
 
 使用例:

@@ -46,10 +46,12 @@ app = func.FunctionApp()
 
 
 def _get_cosmos_client() -> CosmosClient:
+    """Cosmos DB クライアントを返す（マネージド ID 認証のみ）。
+
+    アカウントポリシーで disableLocalAuth=true を強制しているため、
+    キーベース認証は意図的にサポートしない。
+    """
     endpoint = os.environ["COSMOS_ENDPOINT"]
-    key = os.environ.get("COSMOS_KEY")
-    if key:
-        return CosmosClient(endpoint, key)
     return CosmosClient(endpoint, credential=DefaultAzureCredential())
 
 

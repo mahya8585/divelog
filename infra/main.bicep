@@ -40,16 +40,15 @@ param secretKey string = ''
 @description('LLM プロバイダー（openai | azure_openai）')
 param llmProvider string = 'openai'
 
-@description('OpenAI API Key')
+@description('OpenAI API Key（LLM_PROVIDER=openai 用。Azure OpenAI では UAMI 認証を強制するため使用しない）')
 @secure()
 param openaiApiKey string = ''
 
 @description('Azure OpenAI Endpoint')
 param azureOpenaiEndpoint string = ''
 
-@description('Azure OpenAI API Key')
-@secure()
-param azureOpenaiApiKey string = ''
+// Azure OpenAI / AI Services は disableLocalAuth=true を前提とした UAMI 認証のみを使用する。
+// API キー認証は意図的にサポートしない（copilot-instructions.md の不変条件）。
 
 @description('Azure OpenAI Deployment')
 param azureOpenaiDeployment string = ''
@@ -160,7 +159,6 @@ module backend 'modules/containerApp.bicep' = {
     llmProvider                 : llmProvider
     openaiApiKey                : openaiApiKey
     azureOpenaiEndpoint         : azureOpenaiEndpoint
-    azureOpenaiApiKey           : azureOpenaiApiKey
     azureOpenaiDeployment       : azureOpenaiDeployment
     azureOpenaiApiVersion       : azureOpenaiApiVersion
     gpsDiffThresholdKm          : gpsDiffThresholdKm

@@ -75,6 +75,7 @@
             <label class="form-label small mb-1">緯度 (Latitude)</label>
             <input
               v-model.number="editForm.gps_lat"
+              @change="syncEditMapFromForm"
               type="number"
               step="any"
               min="-90"
@@ -87,6 +88,7 @@
             <label class="form-label small mb-1">経度 (Longitude)</label>
             <input
               v-model.number="editForm.gps_lon"
+              @change="syncEditMapFromForm"
               type="number"
               step="any"
               min="-180"
@@ -95,6 +97,11 @@
               placeholder="例: 127.8567"
             />
           </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small mb-1">地図で GPS を選択</label>
+          <div id="edit-location-map" class="edit-map-container"></div>
+          <div class="form-text">地図をクリック、またはマーカーをドラッグして位置を更新できます。</div>
         </div>
 
         <div v-if="editError" class="alert alert-danger py-2 small mb-2">{{ editError }}</div>
@@ -113,7 +120,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { fetchLocations, updateLocationKnowledge } from '../api/locations.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
 
@@ -127,6 +134,7 @@ const editForm    = ref({ canonical_name: '', gps_lat: null, gps_lon: null })
 const saving      = ref(false)
 const editError   = ref(null)
 const editSuccess = ref(null)
+const GPS_PRECISION = 6
 
 // ── GPS 表示ヘルパー（knowledge があればそちらを優先）────────
 function displayLat(loc) {
@@ -150,6 +158,8 @@ function escapeHtml(s) {
 // ── Leaflet マップ ──────────────────────────────────────────
 let leafletMap   = null
 let markerLayer  = null
+let editLeafletMap = null
+let editMarker = null
 
 function initMap() {
   const L = window.L
@@ -228,12 +238,90 @@ function openEdit(loc) {
     gps_lon: displayLon(loc) ?? null,
   }
   flyToLocation(loc)
+  nextTick(() => {
+    initEditMap()
+  })
 }
 
 function closeEdit() {
+  destroyEditMap()
   editTarget.value  = null
   editError.value   = null
   editSuccess.value = null
+}
+
+function setEditCoordinates(lat, lon) {
+  editForm.value.gps_lat = Number(lat.toFixed(GPS_PRECISION))
+  editForm.value.gps_lon = Number(lon.toFixed(GPS_PRECISION))
+}
+
+function onEditMarkerDragEnd() {
+  const { lat: markerLat, lng: markerLon } = editMarker.getLatLng()
+  setEditCoordinates(markerLat, markerLon)
+}
+
+function upsertEditMarker(lat, lon) {
+  const L = window.L
+  if (!L || !editLeafletMap) return
+  if (!editMarker) {
+    editMarker = L.marker([lat, lon], { draggable: true }).addTo(editLeafletMap)
+    editMarker.on('dragend', onEditMarkerDragEnd)
+    return
+  }
+  editMarker.setLatLng([lat, lon])
+}
+
+function syncEditMapFromForm() {
+  const lat = Number(editForm.value.gps_lat)
+  const lon = Number(editForm.value.gps_lon)
+  if (!editLeafletMap || isNaN(lat) || isNaN(lon)) return
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return
+  upsertEditMarker(lat, lon)
+  editLeafletMap.setView([lat, lon], Math.max(editLeafletMap.getZoom(), 13))
+}
+
+function initEditMap() {
+  const L = window.L
+  if (!L || !editTarget.value) return
+
+  const lat = Number(editForm.value.gps_lat)
+  const lon = Number(editForm.value.gps_lon)
+  const hasGps = !isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+  const center = hasGps ? [lat, lon] : [26.5, 127.9]
+  const zoom = hasGps ? 13 : 9
+
+  if (!editLeafletMap) {
+    editLeafletMap = L.map('edit-location-map', { zoomControl: true }).setView(center, zoom)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(editLeafletMap)
+    editLeafletMap.on('click', (ev) => {
+      const { lat: clickLat, lng: clickLon } = ev.latlng
+      setEditCoordinates(clickLat, clickLon)
+      upsertEditMarker(clickLat, clickLon)
+    })
+  } else {
+    editLeafletMap.setView(center, zoom)
+  }
+
+  editLeafletMap.invalidateSize()
+  if (hasGps) {
+    upsertEditMarker(lat, lon)
+  }
+}
+
+function destroyEditMap() {
+  if (editMarker) {
+    editMarker.off('dragend', onEditMarkerDragEnd)
+    if (editLeafletMap) {
+      editLeafletMap.removeLayer(editMarker)
+    }
+  }
+  editMarker = null
+  if (editLeafletMap) {
+    editLeafletMap.remove()
+    editLeafletMap = null
+  }
 }
 
 async function saveEdit() {
@@ -294,6 +382,7 @@ onBeforeUnmount(() => {
     leafletMap.remove()
     leafletMap = null
   }
+  destroyEditMap()
 })
 </script>
 
@@ -347,5 +436,12 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 420px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.edit-map-container {
+  width: 100%;
+  height: 220px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
 }
 </style>
