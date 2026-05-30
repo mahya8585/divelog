@@ -46,30 +46,18 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Flex Consumption では allowSharedKeyAccess: false のため、Kudu による ZIP
-      # アップロード先ストレージの認証に呼び出し元 SP の Entra ID トークンを使用する。
-      # SP に Storage Blob Data Contributor がない場合は 403 になる。
-      # functionApp.bicep の条件付きロール割り当ては GITHUB_ACTIONS_PRINCIPAL_ID 未設定時は
-      # スキップされるため、ここで冪等に付与する（既に割り当て済みの場合はエラーを無視）。
-      - name: Ensure SP has Storage Blob Data Contributor (Flex Consumption デプロイ用)
-        run: |
-          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          STORAGE_ID=$(az storage account list \
-            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
-            --query "[0].id" -o tsv)
-          az role assignment create \
-            --assignee-object-id "$SP_OBJECT_ID" \
-            --assignee-principal-type ServicePrincipal \
-            --role "Storage Blob Data Contributor" \
-            --scope "$STORAGE_ID" \
-            --only-show-errors || true
-
       - name: Deploy to Azure Functions
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.FUNCTION_APP_NAME }}
-          package: ./.deploy/functions
-          # Flex Consumption では Oryx によるリモートビルドで requirements.txt から依存解決する
-          scm-do-build-during-deployment: true
-          enable-oryx-build: true
-          remote-build: true
+        # functions-action@v1 の Kudu StorageAccessibleCheck は allowSharedKeyAccess: false の
+        # ストレージに対して共有キーでアクセスを試みるため 403 になる。
+        # MS ドキュメントでは共有キー無効環境には az functionapp deploy を使用するよう明示されており、
+        # このコマンドは管理 REST API 経由で UAMI を使ってストレージに書き込むため Kudu の
+        # StorageAccessibleCheck をバイパスできる。
+        run: |
+          cd ./.deploy/functions
+          zip -r /tmp/func-package.zip .
+          az functionapp deploy \
+            --name "${{ env.FUNCTION_APP_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --src-path /tmp/func-package.zip \
+            --type zip \
+            --build-remote true
