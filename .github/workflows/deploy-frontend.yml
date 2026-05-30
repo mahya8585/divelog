@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
+      - 'infra/**'
       - '.github/workflows/deploy-frontend.yml'
   # main 以外のブランチでも手動でフロントエンドだけ再公開できるようにする。
   # 例: VITE_API_BASE_URL のバンドル更新検証、SWA ホスト名変更直後の差分公開など。
