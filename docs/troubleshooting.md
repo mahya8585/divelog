@@ -12,6 +12,55 @@
 
 ---
 
+## 2026-05-29: フロントエンドが /api/login に POST すると SWA が 405 を返しログイン不能
+
+### 日付
+
+2026-05-29
+
+### 事象
+
+本番 SWA (`https://witty-pond-00b1ab000.7.azurestaticapps.net`) でログインフォームに入力して「ログイン」をクリックすると「ログインに失敗しました」が表示される。ブラウザ DevTools Console に `Failed to load resource: the server responded with a status of 405 ()` (`api/login`) が出力される。
+
+Container App (`https://ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io/api/login`) に直接 POST すると 401（メールアドレスまたはパスワードが正しくありません）が正常に返る。
+
+### 原因
+
+GitHub Actions (`deploy-frontend.yml`) の `env:` ブロックで `VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}` を常に展開していた。  
+`VITE_API_BASE_URL` シークレットが GitHub に未登録（または空文字）の場合、`${{ secrets.VITE_API_BASE_URL }}` は空文字列に展開され、その空文字列がビルドプロセスの環境変数として設定される。  
+Vite の env 優先順位では **プロセス環境変数（`process.env`）が `.env.production` より優先**されるため、`frontend/.env.production` に正しい URL が書かれていても空文字列で上書きされ、`import.meta.env.VITE_API_BASE_URL` が `""` のままバンドルに焼き付けられた。  
+その結果フロントエンドは `BASE_URL=""` のままビルドされ、`fetch('/api/login')` が Container App ではなく SWA 自身の同一オリジン `/api/login` に向かう。Azure Static Web Apps は `/api/*` を Functions バックエンド専用として予約しており、Functions が紐付いていない場合 POST に対して **405 Method Not Allowed** を返す。
+
+### 修正対応
+
+`.github/workflows/deploy-frontend.yml` を修正し、`VITE_API_BASE_URL` シークレットが空の場合に環境変数を展開しないよう変更した。
+
+```yaml
+# 変更前（常に展開 → 空シークレットで .env.production を上書き）
+env:
+  VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+
+# 変更後（シークレットが非空のときのみ $GITHUB_ENV に書き出す）
+- name: Export VITE_API_BASE_URL (シークレットが設定されている場合のみ)
+  if: ${{ secrets.VITE_API_BASE_URL != '' }}
+  env:
+    VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+  run: echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> $GITHUB_ENV
+```
+
+シークレット未設定時は `frontend/.env.production` の値（`https://ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io`）が Vite に使われる。  
+修正後に `deploy-frontend.yml` を `workflow_dispatch` で手動トリガし、SWA を再デプロイする。
+
+### 長期修正計画とその進捗
+
+- **完了**: `deploy-frontend.yml` のワークフロー修正（シークレット空時は `.env.production` にフォールバック）
+- **完了**: `docs/troubleshooting.md` に本エントリ追記
+- **推奨**: GitHub Repository Secrets に `VITE_API_BASE_URL=https://ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io` を登録しておく（再発防止と明示的な設定管理のため）。未登録でも `.env.production` でカバーされるが、将来バックエンド URL が変わった際に secrets 更新のみで再ビルドできる。
+
+---
+
+
+
 ## 2026-05-24 (後刻): Bicep 再デプロイで Container App の SECRET_KEY が消えてログイン全滅
 
 ### 日付

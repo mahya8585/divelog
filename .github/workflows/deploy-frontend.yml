@@ -24,11 +24,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # VITE_API_BASE_URL シークレットが設定されている場合のみ環境変数として展開する。
+      # 未設定（空文字列）の場合は環境変数を渡さず、frontend/.env.production の値を Vite が使用する。
+      # 空文字列を env: ブロックで渡すと Vite が .env.production の値を上書きして
+      # BASE_URL="" のままビルドされ /api/login が SWA 自身に向かい 405 になるため。
+      - name: Export VITE_API_BASE_URL (シークレットが設定されている場合のみ)
+        if: ${{ secrets.VITE_API_BASE_URL != '' }}
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> $GITHUB_ENV
+
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         env:
-          # Vite はビルド時に VITE_ プレフィックス環境変数をバンドルへ埋め込む
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           # CSP の connect-src に App Insights ingestion オリジンを動的に許可するために必要。
           # 未設定でもビルドは通る（その場合 ingestion へのテレメトリ送信が CSP で遮断される）。
           VITE_APPINSIGHTS_CONNECTION_STRING: ${{ secrets.VITE_APPINSIGHTS_CONNECTION_STRING }}
