@@ -21,6 +21,10 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    # secrets コンテキストは step の if 条件で直接参照できないため、
+    # job レベルの env に一旦マップしてから step 内で参照する。
+    env:
+      _VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +34,8 @@ jobs:
       # 空文字列を env: ブロックで渡すと Vite が .env.production の値を上書きして
       # BASE_URL="" のままビルドされ /api/login が SWA 自身に向かい 405 になるため。
       - name: Export VITE_API_BASE_URL (シークレットが設定されている場合のみ)
-        if: ${{ secrets.VITE_API_BASE_URL != '' }}
-        env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        run: echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> $GITHUB_ENV
+        if: ${{ env._VITE_API_BASE_URL != '' }}
+        run: echo "VITE_API_BASE_URL=$_VITE_API_BASE_URL" >> $GITHUB_ENV
 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
