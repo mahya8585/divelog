@@ -6,6 +6,7 @@ on:
     paths:
       - 'functions/**'
       - 'workflow/convert_zxu_to_json.py'
+      - 'infra/**'
       - '.github/workflows/deploy-functions.yml'
   workflow_dispatch:
 

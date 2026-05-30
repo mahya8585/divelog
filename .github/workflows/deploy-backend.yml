@@ -6,6 +6,7 @@ on:
     paths:
       - 'backend/**'
       - 'workflow/json/**'
+      - 'infra/**'
       - '.github/workflows/deploy-backend.yml'
   # main 以外のブランチでも手動でバックエンドだけ再公開できるようにする。
   workflow_dispatch:
