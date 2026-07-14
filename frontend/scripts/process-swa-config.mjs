@@ -5,9 +5,10 @@
  * - __BACKEND_ORIGIN__         : VITE_API_BASE_URL の origin
  * - __APPINSIGHTS_INGESTION_ORIGIN__ : VITE_APPINSIGHTS_CONNECTION_STRING から
  *                                  IngestionEndpoint を抽出した origin（ワイルドカード不要）
+ * 環境変数は process.env → .env.production → .env の順に解決する。
  * 未設定 / 不正な値は空文字列に置換され、'self' のみ許可される。
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -26,7 +27,26 @@ function toOrigin(rawUrl) {
   }
 }
 
-let backendOrigin = toOrigin(process.env.VITE_API_BASE_URL || '')
+function loadDotenvFallback(name) {
+  if (process.env[name]) return process.env[name]
+
+  for (const file of ['.env.production', '.env']) {
+    const path = resolve(root, file)
+    if (!existsSync(path)) continue
+
+    const line = readFileSync(path, 'utf8')
+      .split(/\r?\n/)
+      .find((entry) => entry.trim().startsWith(`${name}=`))
+    if (!line) continue
+
+    const value = line.trim().replace(new RegExp(`^${name}=`), '').trim().replace(/^(['"])(.*)\1$/, '$2')
+    if (value) return value
+  }
+
+  return ''
+}
+
+let backendOrigin = toOrigin(loadDotenvFallback('VITE_API_BASE_URL'))
 
 // Application Insights 接続文字列から IngestionEndpoint を抽出
 let aiIngestionOrigin = ''
