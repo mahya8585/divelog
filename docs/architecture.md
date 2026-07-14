@@ -70,6 +70,8 @@ flowchart LR
     class PE_COS,COSMOS store
 ```
 
+Container Apps (`ca-divelog`) は Flask API 専用です。API ホストの `GET /` と `GET /health` は疎通確認用で、ユーザー画面は Static Web Apps の URL を開きます。
+
 ### 認証 / 認可 フロー
 
 ```mermaid

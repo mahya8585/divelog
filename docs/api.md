@@ -29,6 +29,22 @@
 
 ---
 
+## `GET /`
+
+Container Apps の API ホストに直接アクセスしたときの疎通確認用エンドポイントです。フロントエンドの画面は Static Web Apps から提供されます。
+
+### レスポンス
+
+```json
+{
+  "service": "divelog-api",
+  "status": "ok",
+  "health": "/health"
+}
+```
+
+---
+
 ## `GET /health`
 
 ヘルスチェック。Container Apps のライブネスプローブ用。

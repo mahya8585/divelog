@@ -12,6 +12,32 @@
 
 ---
 
+## 2026-07-14: Container Apps の URL を開くと 404 Not Found が表示される
+
+### 日付
+
+2026-07-14
+
+### 事象
+
+`https://ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io/` をブラウザで開くと `404 Not Found` が表示される。`/health` は `200` を返している。
+
+### 原因
+
+Container Apps はユーザー画面ではなく Flask API 専用で、ルート `/` にルート定義がなかった。フロントエンドは別リソースの Static Web Apps から提供されるため、`/` の 404 はコンテナ停止や ingress、ポート設定の障害ではない。
+
+### 修正対応
+
+`backend/app.py` に `GET /` の疎通確認エンドポイントを追加し、`service`、`status`、`health` を JSON で返すようにした。既存の `/health` と Container Apps の HTTP probes は変更していない。
+
+### 長期修正計画とその進捗
+
+- **完了**: API ホストのルートで 200 の JSON を返すよう変更。
+- **完了**: `docs/api.md` と `docs/architecture.md` に、画面 URL と API URL の役割を明記。
+- **運用**: ユーザー画面は Static Web Apps の URL (`https://witty-pond-00b1ab000.7.azurestaticapps.net`) を使用し、Container Apps の URL は API または疎通確認に使用する。
+
+---
+
 ## 2026-05-29: フロントエンドが /api/login に POST すると SWA が 405 を返しログイン不能
 
 ### 日付

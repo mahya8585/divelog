@@ -368,6 +368,16 @@ def _get_heatmap_cached(owner_email: str | None) -> tuple[list, list]:
 
 # ── ヘルスチェック ────────────────────────────────────────
 
+@app.route("/", methods=["GET"])
+@limiter.exempt
+def root():
+    return jsonify({
+        "service": "divelog-api",
+        "status": "ok",
+        "health": "/health",
+    })
+
+
 @app.route("/health", methods=["GET"])
 @limiter.exempt
 def health():
