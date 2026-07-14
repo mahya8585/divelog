@@ -19,6 +19,7 @@ _logger = logging.getLogger(__name__)
 # 環境変数 JSON_DIR が設定されていればそちらを使う（Docker コンテナ内など）
 _DEFAULT_JSON_DIR = Path(__file__).parent.parent / "workflow" / "json"
 JSON_DIR = Path(os.environ.get("JSON_DIR", str(_DEFAULT_JSON_DIR)))
+_LOCATION_KNOWLEDGE_JSON = JSON_DIR.parent / ".location_knowledge.json"
 
 # ── Cosmos DB 設定（環境変数） ───────────────────────────
 COSMOS_ENDPOINT         = os.environ.get("COSMOS_ENDPOINT", "")
@@ -472,12 +473,31 @@ def delete_token(token: str) -> None:
 
 
 def load_all_location_knowledge(owner_email: str | None = None) -> list[dict]:
-    """location_knowledge コンテナから全件取得する（Cosmos DB 利用時のみ）。
+    """location_knowledge から全件取得する。
     normalized_name が定義されているエントリのみ返す（フィードバック型ドキュメントを除外）。
     owner_email 指定時は所有者一致 or 旧データ（owner_email 未設定）のみを返す（IDOR 防止）。
     """
     if not _use_cosmos():
-        return []
+        if not _LOCATION_KNOWLEDGE_JSON.exists():
+            return []
+        try:
+            with open(_LOCATION_KNOWLEDGE_JSON, encoding="utf-8") as f:
+                entries = json.load(f)
+            if not isinstance(entries, list):
+                return []
+            return [
+                entry for entry in entries
+                if isinstance(entry, dict)
+                and entry.get("normalized_name")
+                and (
+                    not owner_email
+                    or not entry.get("owner_email")
+                    or entry.get("owner_email") == owner_email
+                )
+            ]
+        except Exception:
+            _logger.exception("ローカル location_knowledge の読み込みに失敗")
+            return []
     try:
         container = _get_location_knowledge_container()
         if owner_email:
@@ -506,12 +526,48 @@ def upsert_location_knowledge_entry(
     gps_lon: float,
     owner_email: str | None = None,
 ) -> None:
-    """location_knowledge エントリを更新または新規作成する（Cosmos DB 利用時のみ）。
+    """location_knowledge エントリを更新または新規作成する。
 
     既存ドキュメントに別の `owner_email` が記録されている場合は
     LocationKnowledgePermissionError を送出し、上書きを拒否する（IDOR 防止）。
     """
     if not _use_cosmos():
+        entries = load_all_location_knowledge()
+        existing = next(
+            (entry for entry in entries if entry.get("normalized_name") == normalized_name),
+            None,
+        )
+        if existing:
+            existing_owner = existing.get("owner_email")
+            if existing_owner and owner_email and existing_owner != owner_email:
+                raise LocationKnowledgePermissionError(
+                    f"location_knowledge[{normalized_name}] は別オーナーが所有しています"
+                )
+            existing.update({
+                "canonical_name": canonical_name,
+                "gps_lat": gps_lat,
+                "gps_lon": gps_lon,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            if owner_email:
+                existing["owner_email"] = owner_email
+        else:
+            existing = {
+                "id": normalized_name,
+                "normalized_name": normalized_name,
+                "canonical_name": canonical_name,
+                "gps_lat": gps_lat,
+                "gps_lon": gps_lon,
+                "samples": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if owner_email:
+                existing["owner_email"] = owner_email
+            entries.append(existing)
+        _LOCATION_KNOWLEDGE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOCATION_KNOWLEDGE_JSON, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
         return
     container = _get_location_knowledge_container()
     from azure.cosmos.exceptions import CosmosResourceNotFoundError
