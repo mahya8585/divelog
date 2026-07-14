@@ -6,9 +6,19 @@ import 'bootstrap/dist/css/bootstrap.min.css'
 import 'bootstrap-icons/font/bootstrap-icons.css'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
+import markerIcon from 'leaflet/dist/images/marker-icon.png'
+import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 import 'leaflet.heat'
 // 既存コードが window.L を使うためグローバルに公開
 window.L = L
+// Vite バンドル環境で Leaflet 既定マーカー画像が欠落しないように明示指定
+delete L.Icon.Default.prototype._getIconUrl
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+})
 
 import App from './App.vue'
 import HomeView from './views/HomeView.vue'
