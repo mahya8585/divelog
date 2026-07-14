@@ -69,7 +69,7 @@
         class="dive-card"
       >
         <div class="d-flex align-items-center gap-3">
-          <div class="dive-number-circle">#{{ dive.dive_info.dive_number }}</div>
+          <div class="dive-number-circle">#{{ numberByDiveId.get(dive.dive_id) }}</div>
           <div class="flex-grow-1 min-width-0">
             <div class="fw-semibold text-truncate">{{ formatDate(dive.dive_info.datetime) }}</div>
             <div class="text-muted small">
@@ -113,6 +113,17 @@ const form = reactive({
 const hasSearch = computed(() =>
   !!(form.tag || form.year || form.month || form.location)
 )
+
+const numberByDiveId = computed(() => {
+  const sortedDives = [...dives.value]
+    .map((dive, index) => ({ dive, index }))
+    .sort((a, b) => {
+      const datetimeOrder = new Date(a.dive.dive_info.datetime) - new Date(b.dive.dive_info.datetime)
+      return datetimeOrder || a.index - b.index
+    })
+
+  return new Map(sortedDives.map(({ dive }, index) => [dive.dive_id, index + 1]))
+})
 
 // ── ユーティリティ ─────────────────────────────────────
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日']
