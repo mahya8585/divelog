@@ -774,8 +774,8 @@ def get_locations():
     return jsonify({"locations": result})
 
 
-# ロケーション名バリデーション（パス引数として安全な文字列）
-_NORM_NAME_RE = re.compile(r"^[\w\-]{1,200}$")
+# ロケーション名バリデーション（正規化後の文字列として安全な文字列）
+_NORM_NAME_RE = re.compile(r"^[\w.\-]{1,200}$")
 
 
 @app.route("/api/locations/knowledge/<norm_name>", methods=["PUT"])
