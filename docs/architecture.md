@@ -157,7 +157,7 @@ sequenceDiagram
 | Azure Cache for Redis | Basic C0 (TLS 1.2 / nonSSL 無効 / `disableAccessKeyAuth=true` / `aad-enabled=true`) | flask-limiter の共有ストア（UAMI による Entra ID 認証、`Data Contributor` アクセスポリシー） |
 | Azure Container Apps | Consumption (`minReplicas: 1`, VNet 統合) | Flask API ホスティング |
 | Azure Functions | Flex Consumption (FC1, Python 3.11) | Cosmos DB Change Feed: (1) `zxu_change_feed_processor` で ZXU → JSON 変換、(2) `dive_knowledge_processor` で LLM 提案承認済みの GPS を `location_knowledge` へ蓄積 |
-| Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`) | Functions ランタイム用（MI 接続） |
+| Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`, `publicNetworkAccess: Enabled`) | Functions ランタイム／Flex の `app-package` 用（MI/RBAC 接続）。管理グループ Policy の `SecurityControl=Ignore` タグを付け、デプロイ経路だけ公開ネットワークを許可。Blob 匿名アクセスは無効 |
 | Application Insights | — | Functions のテレメトリ／ログ |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
 | Azure Cosmos DB | Serverless (`disableLocalAuth: true`) | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理 |

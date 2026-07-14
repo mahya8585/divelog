@@ -683,10 +683,9 @@ def confirm_upload(upload_id: str):
             return jsonify({"error": "保存された GPS 提案が範囲外です"}), 400
         gps_override = {"lat": f_lat, "lon": f_lon}
 
-    # accept=false の場合は提案を採用せずに登録するため、ステータスは "rejected" にする。
-    # Functions 側は ("uploaded", "confirmed") のみ処理対象とするため、
-    # rejected はそのままユーザ確認済みとして残し、登録 dive は作成しない。
-    new_status = "confirmed" if accept else "rejected"
+    # accept=false の場合も提案を採用せず元データを登録する。
+    # Functions 側の変換対象に含めるため、どちらの選択でも confirmed にする。
+    new_status = "confirmed"
     updated = update_zxu_upload(
         upload_id,
         status=new_status,

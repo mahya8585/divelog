@@ -48,6 +48,9 @@
         <router-link v-if="registeredId" :to="`/dive/${registeredId}`" class="ms-2 fw-semibold">
           詳細を見る
         </router-link>
+        <div v-if="uploadStatus" class="mt-1 text-muted">
+          受付 ID: {{ uploadId }} / 処理状態: {{ uploadStatus }}
+        </div>
       </div>
 
       <div v-if="suggestion" class="alert alert-info py-2 small">
@@ -85,8 +88,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { confirmUpload, uploadDive } from '../api/dives.js'
+import { onUnmounted, ref } from 'vue'
+import { confirmUpload, fetchUploadStatus, uploadDive } from '../api/dives.js'
 
 const fileInputRef  = ref(null)
 const selectedFile = ref(null)
@@ -98,6 +101,45 @@ const wasOverwritten = ref(false)
 const isDragOver   = ref(false)
 const pendingUploadId = ref('')
 const suggestion = ref(null)
+const uploadId = ref('')
+const uploadStatus = ref('')
+let statusPollTimer = null
+
+function stopStatusPolling() {
+  if (statusPollTimer) {
+    clearTimeout(statusPollTimer)
+    statusPollTimer = null
+  }
+}
+
+function startStatusPolling(id) {
+  stopStatusPolling()
+  uploadId.value = id
+  uploadStatus.value = '確認中'
+
+  let attempts = 0
+  const poll = async () => {
+    try {
+      const result = await fetchUploadStatus(id)
+      uploadStatus.value = result.status || '不明'
+      if (result.status === 'processed') {
+        successMsg.value = 'ダイブの変換と登録が完了しました。一覧を更新してください。'
+        return
+      }
+      if (result.status === 'failed') {
+        errorMsg.value = result.error || 'ダイブの変換に失敗しました。'
+        return
+      }
+    } catch (error) {
+      errorMsg.value = error.message || '登録状態の取得に失敗しました。'
+      return
+    }
+
+    attempts += 1
+    if (attempts < 20) statusPollTimer = setTimeout(poll, 3000)
+  }
+  poll()
+}
 
 function triggerFileInput() {
   fileInputRef.value?.click()
@@ -115,10 +157,13 @@ function onDrop(e) {
 }
 
 function selectFile(file) {
+  stopStatusPolling()
   errorMsg.value   = ''
   successMsg.value = ''
   registeredId.value = ''
   pendingUploadId.value = ''
+  uploadId.value = ''
+  uploadStatus.value = ''
   suggestion.value = null
   if (!file.name.toLowerCase().endsWith('.zxu')) {
     errorMsg.value = 'ZXU ファイルのみ対応しています。'
@@ -154,6 +199,7 @@ async function doUpload() {
 }
 
 function handleUploadResult(result, fileToSend) {
+  if (result.upload_id && result.status) startStatusPolling(result.upload_id)
   if (result.dive_id) {
     registeredId.value = result.dive_id
     wasOverwritten.value = !!result.overwritten
@@ -196,8 +242,10 @@ async function decide(accept) {
         suggestedLat: accept ? suggestion.value.suggested_lat : undefined,
         suggestedLon: accept ? suggestion.value.suggested_lon : undefined,
       })
+      const confirmedUploadId = pendingUploadId.value
       suggestion.value = null
       pendingUploadId.value = ''
+      startStatusPolling(confirmedUploadId)
       successMsg.value = accept
         ? '提案を承認しました。バックグラウンドでダイブを登録します。'
         : '提案を却下しました。元の情報でダイブを登録します。'
@@ -222,6 +270,8 @@ async function decide(accept) {
     uploading.value = false
   }
 }
+
+onUnmounted(stopStatusPolling)
 </script>
 
 <style scoped>

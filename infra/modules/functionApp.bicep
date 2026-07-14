@@ -30,6 +30,10 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
+  tags: {
+    // Flex Consumption の app-package は Kudu から到達する必要があるため、管理グループの公開ネットワーク無効化 Policy の対象外にする。
+    SecurityControl: 'Ignore'
+  }
   properties: {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false

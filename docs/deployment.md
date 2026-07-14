@@ -282,6 +282,8 @@ python /app/scripts/seed_user.py --email admin@example.com --password 'S3cure!Pa
 
 ### 6.3 手動デプロイ（例: `az functionapp deployment source config-zip`）
 
+Flex Consumption のデプロイ用 Storage は Kudu から `app-package` コンテナへ到達できる必要があるため、`infra/modules/functionApp.bicep` で `publicNetworkAccess: 'Enabled'` と `SecurityControl=Ignore` タグを設定しています。これは管理グループの Storage 公開ネットワーク無効化 Policy に対する限定例外です。Storage の `allowSharedKeyAccess=false` と Blob の匿名アクセス無効は維持し、デプロイおよび Functions の実行は UAMI/RBAC を使用します。
+
 Flex Consumption はローカルの `.python_packages/` を無視します。誤ってバンドルしたジップを投入すると `ModuleNotFoundError` が出るため、手動デプロイでも **リモートビルドを有効化** します。
 
 ```bash
@@ -303,7 +305,7 @@ az functionapp function list -g rg-divelogsite -n func-divelog -o table
 # 期待: zxu_change_feed_processor と dive_knowledge_processor の 2 つが表示される
 ```
 
-環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。また `dive_knowledge_processor` は `dives` コンテナに対する Change Feed トリガーで、Lease は `COSMOS_DIVES_LEASES_CONTAINER`（既定 `dives_leases`）を使用します。
+環境変数 `COSMOS_TRIGGER_CONNECTION__accountEndpoint` / `__credential=managedidentity` / `__clientId` は Bicep で自動設定済み（接続文字列を使わずマネージド ID で Cosmos に接続）。Flex Consumption の実行ランタイムは Bicep の `functionAppConfig.runtime` で Python 3.11 / Functions v4 を指定しています。また `dive_knowledge_processor` は `dives` コンテナに対する Change Feed トリガーで、Lease は `COSMOS_DIVES_LEASES_CONTAINER`（既定 `dives_leases`）を使用します。
 
 > **LLM 設定はバックエンドで保持**されます（Functions 側に LLM キーは不要）。Container Apps に以下の環境変数を secret として設定してください。
 >

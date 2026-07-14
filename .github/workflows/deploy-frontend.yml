@@ -37,6 +37,10 @@ jobs:
         if: ${{ env._VITE_API_BASE_URL != '' }}
         run: echo "VITE_API_BASE_URL=$_VITE_API_BASE_URL" >> $GITHUB_ENV
 
+      - name: Set production API URL fallback
+        if: ${{ env._VITE_API_BASE_URL == '' }}
+        run: echo "VITE_API_BASE_URL=https://ca-divelog.proudpond-f152c32f.japanwest.azurecontainerapps.io" >> $GITHUB_ENV
+
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         env:
