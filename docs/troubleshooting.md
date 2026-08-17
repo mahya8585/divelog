@@ -12,6 +12,37 @@
 
 ---
 
+## 2026-08-17: ZXU アップロードが処理されず Functions の実行回数が 0 のままになる
+
+### 日付
+
+2026-08-17
+
+### 事象
+
+ダイブログ登録画面からアップロードした ZXU 2 件が一覧へ反映されなかった。Function App は `Running` で 2 関数も登録済みだったが、約 1 か月の実行メトリクスが 0 で、ARM `syncfunctiontriggers` は Host runtime の `InternalServerError` を返した。
+
+### 原因
+
+Flex Consumption のデプロイ用 Storage は Bicep で `publicNetworkAccess: 'Enabled'` と `SecurityControl=Ignore` を宣言していたが、本番ではタグが消失し、管理ポリシーによって `publicNetworkAccess: 'Disabled'` へドリフトしていた。このため Kudu の `StorageAccessibleCheck` が `app-package` コンテナへ到達できず 403 となり、Oryx リモートビルドを実行できなかった。
+
+加えて、Functions デプロイワークフローは Azure CLI 2.88 で廃止された `az functionapp deploy --build-remote true` を使用しており、手動実行すると引数エラーでデプロイ前に終了した。
+
+### 修正対応
+
+Storage に `SecurityControl=Ignore` タグを復元し、`publicNetworkAccess` を Bicep の宣言どおり `Enabled` に戻した。`allowSharedKeyAccess=false`、Blob 匿名アクセス無効、UAMI / RBAC 認証は維持した。
+
+Azure Functions Core Tools 4 へ対象 subscription の AAD トークンを渡して Python 3.11 の Oryx リモートビルドを実行した。`released-package.zip` の更新後、ARM `syncfunctiontriggers` が HTTP 200 を返し、Host と Change Feed Trigger の復旧を確認した。
+
+### 長期修正計画とその進捗
+
+- **完了**: `deploy-functions.yml` を Core Tools 4.13.0 の AAD リモートビルドへ変更し、廃止済み Azure CLI 引数への依存を除去。
+- **完了**: CI の成功条件を `released-package.zip` の更新と ARM `syncfunctiontriggers` の成功に変更。
+- **完了**: Storage の共有キー無効、匿名アクセス無効、UAMI / RBAC 認証を維持したまま、デプロイ用公開エンドポイントとポリシー除外タグを復元。
+- **運用**: Functions の実行回数が 0 の場合は、Function App の外形状態だけで判断せず、Storage の `publicNetworkAccess` / `SecurityControl` タグ、`syncfunctiontriggers`、デプロイパッケージ更新時刻を確認する。
+
+---
+
 ## 2026-07-14: GPS 提案を却下したダイブログが一覧に表示されない
 
 ### 日付

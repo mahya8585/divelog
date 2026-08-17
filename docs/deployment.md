@@ -219,10 +219,11 @@ az ad app federated-credential create --id <appId> --parameters '{
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
-# 5. Functions の Flex Consumption ZIP デプロイで必要な Storage への Blob 書き込み権限を付与
+# 5. Functions の Flex Consumption デプロイで必要な Storage への Blob 書き込み権限を付与
 #    Storage は allowSharedKeyAccess=false のため OAuth (RBAC) 経由でしかアクセスできない。
-#    `Azure/functions-action@v1` は呼び出し元クレデンシャル（=このサービスプリンシパル）で
-#    app-package コンテナへ ZIP をアップロードするため、SP に Storage Blob Data Contributor を付与する。
+#    Core Tools は呼び出し元クレデンシャル（=このサービスプリンシパル）で
+#    app-package コンテナへビルド済み ZIP をアップロードするため、SP に
+#    Storage Blob Data Contributor を付与する。
 #    （`infra/main.bicep` の `githubActionsPrincipalId` パラメータに同じ SP の Object ID を
 #     設定して `az deployment group create` すれば自動付与される。）
 spOid=$(az ad sp show --id <appId> --query id -o tsv)
@@ -278,9 +279,11 @@ python /app/scripts/seed_user.py --email admin@example.com --password 'S3cure!Pa
 
 ### 6.2 GitHub Actions での自動デプロイ（推奨）
 
-`.github/workflows/deploy-functions.yml` で Oryx リモートビルドを使用しています。`functions/**` または `workflow/convert_zxu_to_json.py` に変更が入ると自動デプロイされます。
+`.github/workflows/deploy-functions.yml` で Azure Functions Core Tools 4.13.0 と Oryx リモートビルドを使用しています。`functions/**` または `workflow/convert_zxu_to_json.py` に変更が入ると自動デプロイされます。
 
-### 6.3 手動デプロイ（例: `az functionapp deployment source config-zip`）
+Function App のメインサイトは `ipSecurityRestrictions` で全拒否しているため、Core Tools がデプロイ後に行う Host 疎通確認は 403 になります。ワークフローは `released-package.zip` の更新と ARM `syncfunctiontriggers` の成功をデプロイ完了条件にします。
+
+### 6.3 手動デプロイ
 
 Flex Consumption のデプロイ用 Storage は Kudu から `app-package` コンテナへ到達できる必要があるため、`infra/modules/functionApp.bicep` で `publicNetworkAccess: 'Enabled'` と `SecurityControl=Ignore` タグを設定しています。これは管理グループの Storage 公開ネットワーク無効化 Policy に対する限定例外です。Storage の `allowSharedKeyAccess=false` と Blob の匿名アクセス無効は維持し、デプロイおよび Functions の実行は UAMI/RBAC を使用します。
 
@@ -291,11 +294,20 @@ mkdir -p .deploy/functions
 cp -r functions/. .deploy/functions/
 cp workflow/convert_zxu_to_json.py .deploy/functions/   # フラット配置
 
-# zip して Oryx ビルド付きでデプロイ
-cd .deploy/functions && zip -r ../functions.zip . && cd -
-az functionapp deployment source config-zip \
-  -g rg-divelogsite -n func-divelog --src .deploy/functions.zip --build-remote true
+# 対象 subscription の AAD トークンを渡し、Oryx リモートビルド付きでデプロイ
+cd .deploy/functions
+subscription_id=$(az account show --query id -o tsv)
+az account get-access-token --resource https://management.azure.com/ --output json \
+  | npx --yes azure-functions-core-tools@4.13.0 azure functionapp publish func-divelog \
+      --python --build remote --subscription "$subscription_id" --access-token-stdin
+
+# メインサイトの 403 ではなく、ARM trigger sync で Host の復旧を確認
+function_app_id=$(az functionapp show -g rg-divelogsite -n func-divelog --query id -o tsv)
+az rest --method post \
+  --url "https://management.azure.com${function_app_id}/syncfunctiontriggers?api-version=2024-04-01"
 ```
+
+`az functionapp deploy --build-remote true` は Azure CLI 2.88 では `--build-remote` が認識されないため使用しません。`az functionapp deployment source config-zip` は SCM 発行資格情報経由となり、共有キー無効構成では 403 になるため使用しません。
 
 ### 6.4 検証
 

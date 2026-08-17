@@ -47,17 +47,60 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure Functions
-        # functions-action@v1 の Kudu StorageAccessibleCheck は allowSharedKeyAccess: false の
-        # ストレージに対して共有キーでアクセスを試みるため 403 になる。
-        # MS ドキュメントでは共有キー無効環境には az functionapp deploy を使用するよう明示されており、
-        # このコマンドは管理 REST API 経由で UAMI を使ってストレージに書き込むため Kudu の
-        # StorageAccessibleCheck をバイパスできる。
         run: |
           cd ./.deploy/functions
-          zip -r /tmp/func-package.zip .
-          az functionapp deploy \
+          subscription_id=$(az account show --query id -o tsv)
+          deployment_storage_url=$(az functionapp show \
             --name "${{ env.FUNCTION_APP_NAME }}" \
             --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
-            --src-path /tmp/func-package.zip \
-            --type zip \
-            --build-remote true
+            --query properties.functionAppConfig.deployment.storage.value \
+            --output tsv)
+          storage_account=$(echo "$deployment_storage_url" | sed -E 's#https://([^.]+)\..*#\1#')
+          package_modified_before=$(az storage blob show \
+            --account-name "$storage_account" \
+            --container-name app-package \
+            --name released-package.zip \
+            --auth-mode login \
+            --query properties.lastModified \
+            --output tsv 2>/dev/null || true)
+
+          # Core Tools はデプロイ完了後にメインサイトへ疎通確認するが、この Function App は
+          # HTTP トリガーを持たず ipSecurityRestrictions で全拒否しているため 403 になる。
+          # 公開結果はパッケージ更新時刻と後続の ARM trigger sync で検証する。
+          set +e
+          az account get-access-token \
+            --resource https://management.azure.com/ \
+            --output json \
+            | npx --yes azure-functions-core-tools@4.13.0 azure functionapp publish "${{ env.FUNCTION_APP_NAME }}" \
+                --python \
+                --build remote \
+                --subscription "$subscription_id" \
+                --access-token-stdin
+          token_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$token_status" -ne 0 ]; then
+            echo "Failed to acquire the Azure management token."
+            exit "$token_status"
+          fi
+
+          package_modified_after=$(az storage blob show \
+            --account-name "$storage_account" \
+            --container-name app-package \
+            --name released-package.zip \
+            --auth-mode login \
+            --query properties.lastModified \
+            --output tsv)
+          if [ -z "$package_modified_after" ] || [ "$package_modified_before" = "$package_modified_after" ]; then
+            echo "The Functions deployment package was not updated."
+            exit 1
+          fi
+
+          function_app_id=$(az functionapp show \
+            --name "${{ env.FUNCTION_APP_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query id \
+            --output tsv)
+          az rest \
+            --method post \
+            --url "https://management.azure.com${function_app_id}/syncfunctiontriggers?api-version=2024-04-01"
