@@ -7,6 +7,7 @@
     - コンテナ: tokens / パーティションキー: /id       — 認証トークン（TTL 10 分）
     - コンテナ: zxu_uploads / パーティションキー: /id  — ZXU 生データ（Change Feed トリガー用）
     - コンテナ: location_knowledge / パーティションキー: /id — ロケーション承認ナレッジ
+    - コンテナ: analysis_reports / パーティションキー: /owner_email — 最新分析レポート
 */
 
 param accountName  string
@@ -34,6 +35,9 @@ param divesLeasesContainerName string = 'dives_leases'
 
 @description('ロケーション提案の承認/却下ナレッジ用コンテナ名')
 param locationKnowledgeContainerName string = 'location_knowledge'
+
+@description('所有者ごとの最新分析レポート用コンテナ名')
+param analysisReportsContainerName string = 'analysis_reports'
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name    : accountName
@@ -180,6 +184,20 @@ resource locationKnowledgeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDa
   }
 }
 
+resource analysisReportsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: analysisReportsContainerName
+  properties: {
+    resource: {
+      id: analysisReportsContainerName
+      partitionKey: {
+        paths: ['/owner_email']
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 output endpoint   string = cosmosAccount.properties.documentEndpoint
 output accountId  string = cosmosAccount.id
 output accountName string = cosmosAccount.name
@@ -189,3 +207,4 @@ output zxuLeasesContainerName string = zxuLeasesContainer.name
 output divesLeasesContainerName string = divesLeasesContainer.name
 output divesContainerName string = cosmosContainer.name
 output locationKnowledgeContainerName string = locationKnowledgeContainer.name
+output analysisReportsContainerName string = analysisReportsContainer.name

@@ -58,7 +58,9 @@ from data import (
     get_user,
     load_all_dives,
     load_all_location_knowledge,
+    load_analysis_report,
     load_dive,
+    save_analysis_report,
     save_dive,
     save_zxu_upload,
     save_token,
@@ -460,14 +462,15 @@ def get_dives():
     year_s   = request.args.get("year",     "").strip()
     month_s  = request.args.get("month",    "").strip()
     location = request.args.get("location", "").strip() or None
+    area     = request.args.get("area",     "").strip() or None
 
     year  = year_s  if year_s.isdigit()  else None
     month = month_s if month_s.isdigit() else None
 
-    has_search = any([tag, year, month, location])
+    has_search = any([tag, year, month, location, area])
     owner = _current_owner()
     dives = (
-        search_dives(tag=tag, year=year, month=month, location=location, owner_email=owner)
+        search_dives(tag=tag, year=year, month=month, location=location, area=area, owner_email=owner)
         if has_search
         else load_all_dives(owner_email=owner)
     )
@@ -492,13 +495,30 @@ def create_analysis_report():
     if generate_analysis_report is None:
         return jsonify({"error": "分析レポート機能を初期化できませんでした。"}), 503
 
-    dives = load_all_dives(owner_email=_current_owner())
+    owner = _current_owner()
+    dives = load_all_dives(owner_email=owner)
     try:
         report = generate_analysis_report(dives)
+        save_analysis_report(owner, report)
     except AnalysisReportError as exc:
         return jsonify({"error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("分析レポートの保存に失敗しました")
+        return jsonify({"error": "分析レポートの保存に失敗しました。"}), 503
 
     return jsonify(report)
+
+
+@app.route("/api/analysis-report", methods=["GET"])
+@require_auth
+@limiter.limit("60 per minute")
+def get_analysis_report():
+    try:
+        report = load_analysis_report(_current_owner())
+    except Exception:
+        app.logger.exception("保存済み分析レポートの取得に失敗しました")
+        return jsonify({"error": "保存済み分析レポートの取得に失敗しました。"}), 503
+    return jsonify({"report": report})
 
 
 @app.route("/api/dives/upload", methods=["POST"])

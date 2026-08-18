@@ -36,7 +36,7 @@ flowchart LR
         end
 
         REDIS["🟥 Azure Cache for Redis<br/>Basic C0 (TLS 1.2)<br/>flask-limiter ストア"]
-        COSMOS["🪐 Cosmos DB (Serverless)<br/>disableLocalAuth=true<br/>publicNetworkAccess=Disabled<br/>― dives / users<br/>― tokens (TTL 600s)<br/>― zxu_uploads / zxu_uploads_leases<br/>― dives_leases<br/>― location_knowledge"]
+        COSMOS["🪐 Cosmos DB (Serverless)<br/>disableLocalAuth=true<br/>publicNetworkAccess=Disabled<br/>― dives / users<br/>― tokens (TTL 600s)<br/>― zxu_uploads / zxu_uploads_leases<br/>― dives_leases<br/>― location_knowledge / analysis_reports"]
         ST["💾 Storage Account<br/>Functions ランタイム用<br/>allowSharedKeyAccess=false"]
         DNS[("Private DNS<br/>privatelink.documents.azure.com")]
     end
@@ -114,6 +114,11 @@ sequenceDiagram
     participant COS as Cosmos DB<br/>(dives)
     participant F as Microsoft Foundry<br/>(Structured Outputs)
 
+    U->>API: GET /api/analysis-report<br/>(分析ページ表示)
+    API->>COS: owner_email + id=latest をポイント読み取り
+    COS-->>API: 前回レポートまたは未生成
+    API-->>U: {report}
+
     U->>API: POST /api/analysis-report<br/>(レポートの作り直し)
     API->>API: require_auth + 6/hour rate limit
     API->>COS: owner_email で全ダイブログ取得
@@ -122,10 +127,11 @@ sequenceDiagram
     API->>F: UAMI / Entra ID<br/>chat.completions + json_schema(strict)
     F-->>API: area_trends + user_trend + recommendations
     API->>API: JSON 構造・件数・文字数を検証
+    API->>COS: analysis_reports.upsert<br/>(owner_email, id=latest)
     API-->>U: AI レポート + 生成日時 + deployment 名
 ```
 
-生成結果は永続化せず、ボタン押下ごとに最新の全ログから再作成する。入力に含まれるロケーション名は信頼できないデータとして扱い、モデルへの命令として解釈しないようシステムプロンプトで制約する。
+生成結果は所有者ごとに最新1件だけを保存し、分析ページの再訪時に表示する。ボタン押下時は最新の全ログから再作成し、生成と検証が成功した後だけ前回レポートを置き換える。入力に含まれるロケーション名は信頼できないデータとして扱い、モデルへの命令として解釈しないようシステムプロンプトで制約する。
 
 #### 分析ページの責務分離
 
@@ -140,6 +146,8 @@ sequenceDiagram
 | 月別潜水本数 | 有効な `dive_info.datetime` の月で1月から12月を集計 |
 
 「レポートの作り直し」を押した場合だけ `POST /api/analysis-report` を呼び出す。バックエンドは認証ユーザーの全ログを再取得し、次の統計だけを Foundry へ送信する。
+
+エリア別潜水本数の棒をクリックすると `/?area=<エリア名>` へ遷移する。一覧 API も画面と同じエリア抽出規則で絞るため、半角・全角コロンやコロン前の空白にかかわらず、その棒に含まれたログだけを表示する。「不明」も同じ規則で一覧化する。
 
 - エリア別の本数、平均最大水深、平均潜水時間、平均最低水温、平均評価、評価済み本数
 - 全体の同指標と月別本数
@@ -206,7 +214,7 @@ sequenceDiagram
 | Azure Storage | Standard_LRS (`allowSharedKeyAccess: false`, `publicNetworkAccess: Enabled`) | Functions ランタイム／Flex の `app-package` 用（MI/RBAC 接続）。管理グループ Policy の `SecurityControl=Ignore` タグを付け、デプロイ経路だけ公開ネットワークを許可。Blob 匿名アクセスは無効 |
 | Application Insights | — | Functions のテレメトリ／ログ |
 | Azure Static Web Apps | Free | Vue.js SPA ホスティング |
-| Azure Cosmos DB | Serverless (`disableLocalAuth: true`) | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理 |
+| Azure Cosmos DB | Serverless (`disableLocalAuth: true`) | ダイブログデータ永続化（Entra ID RBAC 認証）、ユーザー認証・トークン管理、所有者ごとの最新分析レポート1件を `analysis_reports` に保存 |
 | Azure Virtual Network | — | Container Apps + Private Endpoint のネットワーク分離 |
 | Azure Private Endpoint | — | Cosmos DB へのプライベート接続 (groupId: Sql) |
 | Azure Private DNS Zone | — | `privatelink.documents.azure.com` の名前解決 |

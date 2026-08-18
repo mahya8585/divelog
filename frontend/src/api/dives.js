@@ -29,7 +29,7 @@ function apiFetch(url, options = {}) {
 
 /**
  * ダイブ一覧を取得する
- * @param {Object} params - { tag, year, month, location }
+ * @param {Object} params - { tag, year, month, location, area }
  * @returns {Promise<{dives, total, has_search, heatmap_data, markers_data}>}
  */
 export async function fetchDives(params = {}) {
@@ -119,4 +119,15 @@ export async function generateAnalysisReport() {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
   return data
+}
+
+/**
+ * 所有者の前回生成した分析レポートを取得する。
+ * @returns {Promise<object|null>}
+ */
+export async function fetchAnalysisReport() {
+  const res = await apiFetch(`${BASE_URL}/api/analysis-report`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  return data.report ?? null
 }

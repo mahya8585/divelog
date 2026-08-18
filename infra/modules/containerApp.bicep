@@ -36,6 +36,9 @@ param cosmosZxuContainerName string = 'zxu_uploads'
 @description('ロケーション承認ナレッジ用コンテナ名')
 param cosmosLocationKnowledgeContainerName string = 'location_knowledge'
 
+@description('所有者ごとの最新分析レポート用コンテナ名')
+param cosmosAnalysisReportsContainerName string = 'analysis_reports'
+
 @description('認証トークン署名用シークレットキー（Cosmos 未使用時のフォールバック用、通常は空でよい）')
 @secure()
 param secretKey string = ''
@@ -110,6 +113,7 @@ var baseEnv = [
   { name: 'COSMOS_DATABASE',      value: cosmosDatabaseName }
   { name: 'COSMOS_ZXU_CONTAINER', value: cosmosZxuContainerName }
   { name: 'COSMOS_LOCATION_KNOWLEDGE_CONTAINER', value: cosmosLocationKnowledgeContainerName }
+  { name: 'COSMOS_ANALYSIS_REPORTS_CONTAINER', value: cosmosAnalysisReportsContainerName }
   { name: 'AZURE_CLIENT_ID',      value: uaMI.properties.clientId }
   { name: 'TRUST_PROXY_HOPS',     value: '1' }
   { name: 'TOKEN_TTL_SECONDS',    value: string(tokenTtlSeconds) }

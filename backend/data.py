@@ -32,6 +32,10 @@ COSMOS_LOCATION_KNOWLEDGE_CONTAINER = os.environ.get(
     "COSMOS_LOCATION_KNOWLEDGE_CONTAINER",
     "location_knowledge",
 )
+COSMOS_ANALYSIS_REPORTS_CONTAINER = os.environ.get(
+    "COSMOS_ANALYSIS_REPORTS_CONTAINER",
+    "analysis_reports",
+)
 
 # トークン有効期限（秒）。環境変数 TOKEN_TTL_SECONDS で上書き可能。
 # デフォルト 600 = 10 分。Cosmos tokens コンテナの defaultTtl と一致させること。
@@ -107,6 +111,16 @@ def _get_location_knowledge_container():
     return db.create_container_if_not_exists(
         id=COSMOS_LOCATION_KNOWLEDGE_CONTAINER,
         partition_key=PartitionKey(path="/id"),
+    )
+
+
+def _get_analysis_reports_container():
+    from azure.cosmos import PartitionKey
+    client = _get_cosmos_client()
+    db = client.get_database_client(COSMOS_DATABASE)
+    return db.create_container_if_not_exists(
+        id=COSMOS_ANALYSIS_REPORTS_CONTAINER,
+        partition_key=PartitionKey(path="/owner_email"),
     )
 
 
@@ -331,6 +345,7 @@ def search_dives(
     year: str | None = None,
     month: str | None = None,
     location: str | None = None,
+    area: str | None = None,
     owner_email: str | None = None,
 ) -> list[dict]:
     """条件に合うダイブデータを返す。"""
@@ -354,6 +369,8 @@ def search_dives(
         loc_name = (d.get("location") or {}).get("name", "") or ""
         if location and location.lower() not in loc_name.lower():
             continue
+        if area and _area_name(loc_name) != area:
+            continue
 
         # タグ部分一致
         if tag:
@@ -364,6 +381,52 @@ def search_dives(
         results.append(d)
 
     return results
+
+
+def _area_name(location_name: object) -> str:
+    source = str(location_name or "").strip()
+    separator_indexes = [index for index in (source.find(":"), source.find("：")) if index >= 0]
+    if not separator_indexes:
+        return "不明"
+    return source[:min(separator_indexes)].strip() or "不明"
+
+
+def load_analysis_report(owner_email: str) -> dict | None:
+    """所有者の最新分析レポートを返す。Cosmos 未設定時は永続化しない。"""
+    if not _use_cosmos():
+        return None
+    from azure.cosmos.exceptions import CosmosResourceNotFoundError
+    try:
+        item = _get_analysis_reports_container().read_item(
+            item="latest",
+            partition_key=owner_email,
+        )
+    except CosmosResourceNotFoundError:
+        return None
+    return item.get("report")
+
+
+def save_analysis_report(owner_email: str, report: dict) -> None:
+    """所有者ごとに最新の分析レポート1件だけを保存する。"""
+    if not _use_cosmos():
+        return
+
+    container = _get_analysis_reports_container()
+    stale_items = container.query_items(
+        query="SELECT VALUE c.id FROM c WHERE c.id != @latestId",
+        parameters=[{"name": "@latestId", "value": "latest"}],
+        partition_key=owner_email,
+    )
+    for item_id in stale_items:
+        container.delete_item(item=item_id, partition_key=owner_email)
+
+    container.upsert_item({
+        "id": "latest",
+        "owner_email": owner_email,
+        "schema_version": 1,
+        "report": report,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 # ── ユーザー管理（Cosmos DB `users` コンテナ） ────────────

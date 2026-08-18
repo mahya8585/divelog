@@ -41,6 +41,7 @@ param llmProvider          = 'azure_openai'
 param azureOpenaiEndpoint  = 'https://maaya-lab.cognitiveservices.azure.com/'
 param azureOpenaiDeployment = 'gpt-4.1'
 param analysisReportAzureOpenaiDeployment = 'gpt-5.4'
+param analysisReportsContainerName = 'analysis_reports'
 param azureOpenaiApiVersion = '2025-01-01-preview'
 // API キーは設定しない（Managed Identity 経由で AAD トークン取得）。
 // azureOpenaiApiKey パラメータ自体を main.bicep から削除済みのため指定不可。

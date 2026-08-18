@@ -69,7 +69,7 @@
         <div class="col-lg-6">
           <div class="chart-card h-100">
             <div class="section-title">エリア別潜水本数</div>
-            <div class="chart-wrap"><canvas ref="areaChartRef"></canvas></div>
+            <div class="chart-wrap chart-clickable"><canvas ref="areaChartRef"></canvas></div>
           </div>
         </div>
         <div class="col-lg-6">
@@ -125,13 +125,15 @@
 
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js'
-import { fetchDives, generateAnalysisReport } from '../api/dives.js'
+import { fetchAnalysisReport, fetchDives, generateAnalysisReport } from '../api/dives.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 const dives = ref([])
+const router = useRouter()
 const loading = ref(true)
 const error = ref('')
 const generating = ref(false)
@@ -187,7 +189,7 @@ function getArea(name) {
   return source.slice(0, Math.min(...separatorIndexes)).trim() || '不明'
 }
 
-function buildChart(canvas, labels, data, color) {
+function buildChart(canvas, labels, data, color, onBarClick = null) {
   if (!canvas || !labels.length) return
   // Chart.js の重複生成を避ける
   if (canvas.__chart) canvas.__chart.destroy()
@@ -210,6 +212,17 @@ function buildChart(canvas, labels, data, color) {
         legend: { display: false },
         tooltip: { displayColors: false },
       },
+      onClick: onBarClick
+        ? (_event, elements) => {
+            const index = elements[0]?.index
+            if (index != null) onBarClick(labels[index])
+          }
+        : undefined,
+      onHover: onBarClick
+        ? (event, elements) => {
+            event.native.target.style.cursor = elements.length ? 'pointer' : 'default'
+          }
+        : undefined,
       scales: {
         y: {
           beginAtZero: true,
@@ -265,7 +278,13 @@ function aggregateData() {
     areaMap.set(key, (areaMap.get(key) || 0) + 1)
   })
   const areaEntries = [...areaMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
-  buildChart(areaChartRef.value, areaEntries.map(([name]) => name), areaEntries.map(([, count]) => count), '#0ea5e9')
+  buildChart(
+    areaChartRef.value,
+    areaEntries.map(([name]) => name),
+    areaEntries.map(([, count]) => count),
+    '#0ea5e9',
+    (area) => router.push({ path: '/', query: { area } }),
+  )
 
   const monthMap = new Map(Array.from({ length: 12 }, (_, i) => [i + 1, 0]))
   diveList.forEach((dive) => {
@@ -299,13 +318,17 @@ async function loadReport() {
     dives.value = data.dives || []
   } catch (e) {
     error.value = 'データの取得に失敗しました。バックエンドの状態を確認してください。'
-  } finally {
-    loading.value = false
   }
   if (!error.value) {
+    try {
+      aiReport.value = await fetchAnalysisReport()
+    } catch (e) {
+      aiError.value = e.message || '保存済みレポートの取得に失敗しました。'
+    }
     await nextTick()
     aggregateData()
   }
+  loading.value = false
 }
 
 onMounted(() => {

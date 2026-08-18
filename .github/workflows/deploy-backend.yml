@@ -102,6 +102,7 @@ jobs:
 
           SECRETS=()
           ENVS=("LLM_PROVIDER=$PROVIDER")
+          ENVS+=("COSMOS_ANALYSIS_REPORTS_CONTAINER=analysis_reports")
 
           if [ "$PROVIDER" = "openai" ]; then
             SECRETS+=("openai-api-key=$OPENAI_API_KEY")

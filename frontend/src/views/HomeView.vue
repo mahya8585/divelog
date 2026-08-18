@@ -32,6 +32,7 @@
             </label>
             <input v-model="form.location" type="text" class="form-control form-control-sm"
                    placeholder="例: 沖縄本島" @keyup.enter="doSearch" />
+                 <div v-if="form.area" class="form-text">エリア: {{ form.area }}</div>
           </div>
           <div class="col-md-2 d-flex gap-2">
             <button class="btn btn-primary btn-sm w-100" @click="doSearch">
@@ -108,10 +109,11 @@ const form = reactive({
   year:     route.query.year     || '',
   month:    route.query.month    || '',
   location: route.query.location || '',
+  area:     route.query.area     || '',
 })
 
 const hasSearch = computed(() =>
-  !!(form.tag || form.year || form.month || form.location)
+  !!(form.tag || form.year || form.month || form.location || form.area)
 )
 
 const numberByDiveId = computed(() => {
@@ -205,6 +207,7 @@ async function loadDives() {
       year:     form.year,
       month:    form.month,
       location: form.location,
+      area:     form.area,
     })
     dives.value       = data.dives
     heatmapData.value = data.heatmap_data
@@ -223,12 +226,13 @@ function doSearch() {
     ...(form.year     ? { year:     form.year }     : {}),
     ...(form.month    ? { month:    form.month }    : {}),
     ...(form.location ? { location: form.location } : {}),
+    ...(form.area     ? { area:     form.area }     : {}),
   }})
   loadDives()
 }
 
 function clearSearch() {
-  form.tag = form.year = form.month = form.location = ''
+  form.tag = form.year = form.month = form.location = form.area = ''
   router.replace({ query: {} })
   loadDives()
 }
@@ -239,6 +243,7 @@ watch(() => route.query, q => {
   form.year     = q.year     || ''
   form.month    = q.month    || ''
   form.location = q.location || ''
+  form.area     = q.area     || ''
 })
 
 onMounted(async () => {

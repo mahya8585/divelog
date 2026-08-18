@@ -56,6 +56,9 @@ param azureOpenaiDeployment string = ''
 @description('分析レポート専用 Azure OpenAI Deployment')
 param analysisReportAzureOpenaiDeployment string = 'gpt-5.4'
 
+@description('所有者ごとの最新分析レポート用 Cosmos DB コンテナ名')
+param analysisReportsContainerName string = 'analysis_reports'
+
 @description('Azure OpenAI API Version')
 param azureOpenaiApiVersion string = '2024-10-21'
 
@@ -97,6 +100,7 @@ module cosmos 'modules/cosmosDb.bicep' = {
     containerName   : 'dives'
     zxuContainerName: 'zxu_uploads'
     locationKnowledgeContainerName: 'location_knowledge'
+    analysisReportsContainerName: analysisReportsContainerName
   }
 }
 
@@ -157,6 +161,7 @@ module backend 'modules/containerApp.bicep' = {
     cosmosDatabaseName          : cosmos.outputs.databaseName
     cosmosZxuContainerName      : cosmos.outputs.zxuContainerName
     cosmosLocationKnowledgeContainerName: cosmos.outputs.locationKnowledgeContainerName
+    cosmosAnalysisReportsContainerName: cosmos.outputs.analysisReportsContainerName
     secretKey                   : secretKey
     appInsightsConnectionString : functions.outputs.appInsightsConnectionString
     redisHostName               : redis.outputs.hostName

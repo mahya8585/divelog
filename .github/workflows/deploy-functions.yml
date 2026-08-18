@@ -46,6 +46,48 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Reconcile deployment storage access
+        run: |
+          deployment_storage_url=$(az functionapp show \
+            --name "${{ env.FUNCTION_APP_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query properties.functionAppConfig.deployment.storage.value \
+            --output tsv)
+          storage_account=$(echo "$deployment_storage_url" | sed -E 's#https://([^.]+)\..*#\1#')
+          storage_account_id=$(az storage account show \
+            --name "$storage_account" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query id \
+            --output tsv)
+
+          # 管理 Policy の対象外タグを先に復元してから、Kudu が app-package へ
+          # 到達するための公開エンドポイントを Bicep の宣言値へ戻す。
+          az tag update \
+            --resource-id "$storage_account_id" \
+            --operation Merge \
+            --tags SecurityControl=Ignore \
+            --output none
+          az storage account update \
+            --name "$storage_account" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --public-network-access Enabled \
+            --default-action Allow \
+            --output none
+
+          storage_state=$(az storage account show \
+            --name "$storage_account" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query "{publicNetworkAccess:publicNetworkAccess,defaultAction:networkRuleSet.defaultAction,securityControl:tags.SecurityControl,allowSharedKeyAccess:allowSharedKeyAccess}" \
+            --output json)
+          echo "$storage_state"
+          if [ "$(echo "$storage_state" | jq -r '.publicNetworkAccess')" != "Enabled" ] || \
+             [ "$(echo "$storage_state" | jq -r '.defaultAction')" != "Allow" ] || \
+             [ "$(echo "$storage_state" | jq -r '.securityControl')" != "Ignore" ] || \
+             [ "$(echo "$storage_state" | jq -r '.allowSharedKeyAccess')" != "false" ]; then
+            echo "Deployment storage access does not match the required secure configuration."
+            exit 1
+          fi
+
       - name: Deploy to Azure Functions
         run: |
           cd ./.deploy/functions
@@ -76,12 +118,16 @@ jobs:
                 --build remote \
                 --subscription "$subscription_id" \
                 --access-token-stdin
-          token_status=${PIPESTATUS[0]}
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
 
-          if [ "$token_status" -ne 0 ]; then
+          if [ "${pipeline_status[0]}" -ne 0 ]; then
             echo "Failed to acquire the Azure management token."
-            exit "$token_status"
+            exit "${pipeline_status[0]}"
+          fi
+          if [ "${pipeline_status[1]}" -ne 0 ]; then
+            echo "Azure Functions Core Tools failed to publish the package."
+            exit "${pipeline_status[1]}"
           fi
 
           package_modified_after=$(az storage blob show \

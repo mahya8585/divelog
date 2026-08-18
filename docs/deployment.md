@@ -139,7 +139,9 @@ az containerapp update \
 2. `GET /health` が `200` を返す。
 3. 未認証の `POST /api/analysis-report` が `401` を返す。
 4. 認証後に「レポートの作り直し」が GPT-5.4 の strict JSON Schema応答を表示する。
-5. フロントエンドを変更した場合は、本番bundleに「エリア別潜水本数」などの新しい表示文言が含まれ、旧文言が残っていない。
+5. `/analysis` を再読み込みして前回レポートが復元され、`analysis_reports` に所有者ごとに `id=latest` の1件だけがある。
+6. エリア別潜水本数の棒から、そのエリアに含まれるダイブログ一覧へ遷移できる。
+7. フロントエンドを変更した場合は、本番bundleに「エリア別潜水本数」などの新しい表示文言が含まれ、旧文言が残っていない。
 
 ---
 
@@ -183,7 +185,7 @@ npx @azure/static-web-apps-cli deploy ./dist \
 |---|---|---|
 | `.github/workflows/deploy-backend.yml` | `backend/**`, `workflow/json/**` | ACR ビルド → Container Apps 更新 |
 | `.github/workflows/deploy-frontend.yml` | `frontend/**` | Vite ビルド (`VITE_API_BASE_URL` 埋め込み) → Static Web Apps デプロイ |
-| `.github/workflows/deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py` | フラット配置でステージ → Functions デプロイ（Oryx リモートビルド） |
+| `.github/workflows/deploy-functions.yml` | `functions/**`, `workflow/convert_zxu_to_json.py`, `infra/**` | デプロイ用 Storage の構成ドリフトを復元・検証 → フラット配置でステージ → Functions デプロイ（Oryx リモートビルド） |
 
 #### 必要な GitHub Secrets
 
@@ -200,6 +202,8 @@ npx @azure/static-web-apps-cli deploy ./dist \
 #### GPS 提案・過去ログ分析 LLM 用の GitHub Secrets / Variables
 
 `deploy-backend.yml` の `Update LLM secrets and env on Container App` ステップが、GPS 提案と分析ページの「レポートの作り直し」で共通利用する以下の設定を `ca-divelog` の env / secrets として反映します（Bicep を再実行せずに切替可能）。分析レポートは `backend/prompts/dive_analysis/` の Structured Outputs スキーマを使います。
+
+分析レポートの保存先は `COSMOS_ANALYSIS_REPORTS_CONTAINER=analysis_reports` として Bicep と同ワークフローから固定値で設定する。利用者が変更する GitHub Variable ではなく、コンテナのパーティションキー `/owner_email` と対になるアプリケーション契約として管理する。
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets)
 
@@ -324,9 +328,11 @@ python /app/scripts/seed_user.py --email admin@example.com --password 'S3cure!Pa
 
 ### 6.2 GitHub Actions での自動デプロイ（推奨）
 
-`.github/workflows/deploy-functions.yml` で Azure Functions Core Tools 4.13.0 と Oryx リモートビルドを使用しています。`functions/**` または `workflow/convert_zxu_to_json.py` に変更が入ると自動デプロイされます。
+`.github/workflows/deploy-functions.yml` で Azure Functions Core Tools 4.13.0 と Oryx リモートビルドを使用しています。`functions/**`、`workflow/convert_zxu_to_json.py`、または `infra/**` に変更が入ると自動デプロイされます。
 
 Function App のメインサイトは `ipSecurityRestrictions` で全拒否しているため、Core Tools がデプロイ後に行う Host 疎通確認は 403 になります。ワークフローは `released-package.zip` の更新と ARM `syncfunctiontriggers` の成功をデプロイ完了条件にします。
+
+公開前には、管理 Policy によるドリフト対策としてデプロイ用 Storage の `SecurityControl=Ignore`、`publicNetworkAccess=Enabled`、`networkRuleSet.defaultAction=Allow` を Bicep の宣言値へ収束させます。`allowSharedKeyAccess=false` も検証するため、共有キー認証が再有効化された状態では公開を開始しません。この更新には OIDC サービスプリンシパルの Storage Account に対する管理プレーン更新権限が必要です。
 
 ### 6.3 手動デプロイ
 

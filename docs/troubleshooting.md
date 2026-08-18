@@ -12,6 +12,37 @@
 
 ---
 
+## 2026-08-18: Functions デプロイが Storage 403 で再失敗
+
+### 日付
+
+2026-08-18
+
+### 事象
+
+GitHub Actions の `Deploy Functions` が、Kudu の `StorageAccessibleCheck` で `app-package` コンテナへ ZIP をアップロードする際に HTTP 403 を返して失敗した。
+
+### 原因
+
+前日の復旧後も、Functions デプロイ用 Storage の `SecurityControl=Ignore` タグまたは `publicNetworkAccess=Enabled` が Azure Policy によって再度ドリフトし得る状態だった。Bicep には期待値が宣言されている一方、`deploy-functions.yml` は Functions パッケージだけを公開し、デプロイ直前に Storage の実状態を復元・検証していなかった。
+
+また、Core Tools を実行するパイプラインでは Azure CLI 側の終了コードだけを保存しており、Core Tools 自体の失敗を直接報告できていなかった。
+
+### 修正対応
+
+`deploy-functions.yml` に、公開直前に Storage の `SecurityControl=Ignore` タグをマージし、`publicNetworkAccess=Enabled` / `networkRuleSet.defaultAction=Allow` を Bicep の宣言値へ戻すステップを追加した。更新後は共有キーが引き続き無効であることも含めて状態を検証し、期待値と異なる場合は公開前に失敗させる。
+
+Core Tools の終了コードもパイプラインから個別に保存し、パッケージ公開の失敗をその場で報告するよう修正した。
+
+### 長期修正計画とその進捗
+
+- **完了**: Functions 公開のたびにデプロイ用 Storage の限定例外タグとネットワーク設定を収束させる。
+- **完了**: `allowSharedKeyAccess=false` と Blob 匿名アクセス無効を維持し、公開ネットワーク上でも Entra ID / RBAC 認証を必須とする。
+- **完了**: Core Tools と Azure CLI の終了コードをそれぞれ検証する。
+- **運用**: 管理 Policy の除外条件が変更された場合は、Workflow の自己修復に依存せず Policy assignment 側の例外を更新する。
+
+---
+
 ## 2026-08-17: ZXU アップロードが処理されず Functions の実行回数が 0 のままになる
 
 ### 日付

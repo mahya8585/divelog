@@ -68,6 +68,8 @@ npm run preview # ビルド結果をローカル確認
 1. バックエンドとフロントエンドを起動してログインする。
 2. `/analysis` を開き、最深水深・最低水温・最長潜水時間、エリア別・月別グラフを確認する。この時点では Foundry を呼び出さない。
 3. 「レポートの作り直し」を押し、エリア傾向・利用者傾向・おすすめスポットが生成されることを確認する。
+4. `/analysis` を再読み込みし、前回生成したレポートが表示されることを確認する。Cosmos 未設定の JSON フォールバック環境ではレポートを永続化しない。
+5. エリア別潜水本数の棒を押し、一覧画面でその棒に含まれるログだけが表示されることを確認する。
 
 Foundry の実呼び出しには `LLM_PROVIDER=azure_openai`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_VERSION` と、分析用の `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT=gpt-5.4` を設定する。ローカルでは `az login` したユーザーに対象 Foundry アカウントの `Cognitive Services OpenAI User` が必要である。ブラウザから Foundry を直接呼び出さない。
 
@@ -117,6 +119,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `COSMOS_CONTAINER` | `dives` | ダイブデータコンテナ名 |
 | `COSMOS_ZXU_CONTAINER` | `zxu_uploads` | ZXU 生データアップロード用コンテナ名（Change Feed トリガー元） |
 | `COSMOS_LOCATION_KNOWLEDGE_CONTAINER` | `location_knowledge` | ロケーション提案の承認/却下ナレッジコンテナ |
+| `COSMOS_ANALYSIS_REPORTS_CONTAINER` | `analysis_reports` | 所有者ごとの最新分析レポート。パーティションキー `/owner_email`、固定 ID `latest` で1件だけ保持 |
 | `COSMOS_USERS_CONTAINER` | `users` | ユーザー認証情報コンテナ名 |
 | `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
 | `LLM_PROVIDER` | `openai` | LLM プロバイダー (`openai` / `azure_openai`)。GPS 提案と過去ログ分析レポートで共通利用します。本番は `azure_openai` を指定します |
