@@ -109,3 +109,14 @@ export async function fetchDive(diveId) {
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
 }
+
+/**
+ * 所有者の全ダイブログを対象に Microsoft Foundry で分析レポートを生成する。
+ * @returns {Promise<{area_trends: Array, user_trend: string, recommendations: Array, generated_at: string, model_deployment: string}>}
+ */
+export async function generateAnalysisReport() {
+  const res = await apiFetch(`${BASE_URL}/api/analysis-report`, { method: 'POST' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`)
+  return data
+}

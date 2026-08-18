@@ -32,13 +32,15 @@ param staticWebAppLocation = 'eastasia'
 // ── GPS 提案 LLM の既定値（Bicep からデプロイ時に env として注入。CI からは
 // .github/workflows/deploy-backend.yml の Update LLM secrets and env on Container App
 // ステップで上書き可能。GitHub Variables で `LLM_PROVIDER` / `AZURE_OPENAI_ENDPOINT` /
-// `AZURE_OPENAI_DEPLOYMENT` 等を指定するとビルド毎に最新値が適用される）
+// `AZURE_OPENAI_DEPLOYMENT` / `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT` 等を指定すると
+// ビルド毎に最新値が適用される）
 //
 // API キー認証は廃止（Azure ポリシー対応）。Container Apps の UAMI に対し対象 Azure OpenAI
 // リソースで `Cognitive Services OpenAI User` ロールを事前付与する。
 param llmProvider          = 'azure_openai'
 param azureOpenaiEndpoint  = 'https://maaya-lab.cognitiveservices.azure.com/'
 param azureOpenaiDeployment = 'gpt-4.1'
+param analysisReportAzureOpenaiDeployment = 'gpt-5.4'
 param azureOpenaiApiVersion = '2025-01-01-preview'
 // API キーは設定しない（Managed Identity 経由で AAD トークン取得）。
 // azureOpenaiApiKey パラメータ自体を main.bicep から削除済みのため指定不可。

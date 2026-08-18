@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "area_trends": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "area": { "type": "string" },
+          "summary": { "type": "string" },
+          "evidence": { "type": "string" }
+        },
+        "required": ["area", "summary", "evidence"]
+      }
+    },
+    "user_trend": { "type": "string" },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "spot": { "type": "string" },
+          "country_or_region": { "type": "string" },
+          "visited": { "type": "boolean" },
+          "match_score": { "type": "number" },
+          "reason": { "type": "string" }
+        },
+        "required": ["spot", "country_or_region", "visited", "match_score", "reason"]
+      }
+    }
+  },
+  "required": ["area_trends", "user_trend", "recommendations"]
+}

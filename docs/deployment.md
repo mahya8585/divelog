@@ -153,9 +153,9 @@ npx @azure/static-web-apps-cli deploy ./dist \
 | `VITE_APPINSIGHTS_CONNECTION_STRING` | Application Insights 接続文字列。ビルド時に `process-swa-config.mjs` が `IngestionEndpoint=` を抽出し、CSP `connect-src` に `__APPINSIGHTS_INGESTION_ORIGIN__` として動的許可。未設定の場合はテレメトリ送信が CSP で遮断される点に注意 | Application Insights リソースの「接続文字列」をそのまま設定 |
 | `SECRET_KEY` | バックエンドのトークン署名キー（必須）。値が変わると既存ログインセッションが全て失効する | `python -c "import secrets; print(secrets.token_urlsafe(64))"` で生成し、固定値として保存。`deploy-backend.yml` の `Sync SECRET_KEY on Container App` ステップが Container App secret `secret-key` に同期する |
 
-#### GPS 提案 LLM 用の GitHub Secrets / Variables
+#### GPS 提案・過去ログ分析 LLM 用の GitHub Secrets / Variables
 
-`deploy-backend.yml` の `Update LLM secrets and env on Container App` ステップが、以下を `ca-divelog` の env / secrets として反映します（Bicep を再実行せずに切替可能）。
+`deploy-backend.yml` の `Update LLM secrets and env on Container App` ステップが、GPS 提案と分析ページの「レポートの作り直し」で共通利用する以下の設定を `ca-divelog` の env / secrets として反映します（Bicep を再実行せずに切替可能）。分析レポートは `backend/prompts/dive_analysis/` の Structured Outputs スキーマを使います。
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets)
 
@@ -171,7 +171,8 @@ npx @azure/static-web-apps-cli deploy ./dist \
 |---|---|---|
 | `LLM_PROVIDER` | `openai` または `azure_openai` | プロバイダー切替。未設定時は既定 `openai` |
 | `AZURE_OPENAI_ENDPOINT` | `https://maaya-lab.cognitiveservices.azure.com/` | `LLM_PROVIDER=azure_openai` のときに必須。AOAI / Foundry リソースの URL |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` / `gpt-4o-mini` 等 | デプロイメント名（モデル名ではない）。Structured Outputs strict 対応モデルを指定 |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` / `gpt-4o-mini` 等 | GPS 提案で使うデプロイメント名（モデル名ではない） |
+| `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT` | `gpt-5.4` | 過去ログ分析レポート専用の GPT-5.4 デプロイメント名。Structured Outputs strict 対応モデルを指定 |
 | `AZURE_OPENAI_API_VERSION` | `2024-10-21` | 任意。`response_format=json_schema, strict=true` 対応の GA 版以降 |
 | `GPS_DIFF_THRESHOLD_KM` | `25` | 任意。提案 GPS と現 GPS の距離しきい値 (km)。狭めて提案頻度を上げるなら `5`〜`10` |
 
@@ -180,7 +181,7 @@ npx @azure/static-web-apps-cli deploy ./dist \
 Azure ポリシーで Cognitive Services / Foundry リソースの `disableLocalAuth=true` が強制されているため、API キー認証は廃止しました。バックエンドは `DefaultAzureCredential` + `AZURE_CLIENT_ID`（Container App の UAMI `ca-divelog-id`）で Entra ID Bearer Token を取得して AOAI を呼び出します。前提として:
 
 1. AOAI / Foundry アカウントのスコープに対し、UAMI `ca-divelog-id` に **`Cognitive Services OpenAI User`** ロール (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) を付与しておく
-2. GitHub Actions Variables に `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` を設定し、`LLM_PROVIDER=azure_openai` にする
+2. GitHub Actions Variables に `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` / `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT` を設定し、`LLM_PROVIDER=azure_openai` にする
 3. API キーシークレットは作成しない（コード / Bicep / CI から API キー認証経路自体を削除済み）
 
 ロール付与例:

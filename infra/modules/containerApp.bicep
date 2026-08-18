@@ -72,6 +72,9 @@ param azureOpenaiEndpoint string = ''
 @description('Azure OpenAI Deployment 名')
 param azureOpenaiDeployment string = ''
 
+@description('分析レポート専用 Azure OpenAI Deployment 名')
+param analysisReportAzureOpenaiDeployment string = 'gpt-5.4'
+
 @description('Azure OpenAI API バージョン')
 param azureOpenaiApiVersion string = '2024-10-21'
 
@@ -133,6 +136,7 @@ var llmOpenaiEnv = !empty(openaiApiKey) ? [{ name: 'OPENAI_API_KEY', secretRef: 
 var llmAzureBaseEnv = !empty(azureOpenaiEndpoint) ? [
   { name: 'AZURE_OPENAI_ENDPOINT',     value: azureOpenaiEndpoint }
   { name: 'AZURE_OPENAI_DEPLOYMENT',   value: azureOpenaiDeployment }
+  { name: 'ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT', value: analysisReportAzureOpenaiDeployment }
   { name: 'AZURE_OPENAI_API_VERSION',  value: azureOpenaiApiVersion }
 ] : []
 var gpsDiffEnv = [{ name: 'GPS_DIFF_THRESHOLD_KM', value: string(gpsDiffThresholdKm) }]

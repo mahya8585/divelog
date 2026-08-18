@@ -104,6 +104,29 @@ sequenceDiagram
     API-->>U: 200 JSON
 ```
 
+### 過去ダイブログ AI 分析フロー
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as ブラウザ
+    participant API as Flask API
+    participant COS as Cosmos DB<br/>(dives)
+    participant F as Microsoft Foundry<br/>(Structured Outputs)
+
+    U->>API: POST /api/analysis-report<br/>(レポートの作り直し)
+    API->>API: require_auth + 6/hour rate limit
+    API->>COS: owner_email で全ダイブログ取得
+    COS-->>API: 所有者のダイブログのみ
+    API->>API: エリア・月・水深・時間・水温・評価を集計<br/>プロファイル時系列は除外
+    API->>F: UAMI / Entra ID<br/>chat.completions + json_schema(strict)
+    F-->>API: area_trends + user_trend + recommendations
+    API->>API: JSON 構造・件数・文字数を検証
+    API-->>U: AI レポート + 生成日時 + deployment 名
+```
+
+生成結果は永続化せず、ボタン押下ごとに最新の全ログから再作成する。入力に含まれるロケーション名は信頼できないデータとして扱い、モデルへの命令として解釈しないようシステムプロンプトで制約する。
+
 ### ZXU アップロード（同期 GPS 提案 + 非同期変換）フロー
 
 ```mermaid
@@ -165,11 +188,11 @@ sequenceDiagram
 | Azure Private Endpoint | — | Cosmos DB へのプライベート接続 (groupId: Sql) |
 | Azure Private DNS Zone | — | `privatelink.documents.azure.com` の名前解決 |
 | Log Analytics Workspace | PerGB2018 (30 日保持) | Container Apps / Functions / App Insights のログ収集 |
-| Azure OpenAI / Foundry (Cognitive Services `AIServices`) | Standard (`disableLocalAuth: true`) | GPS 提案 LLM のホスティング。`backend/services/location_resolver.py` から **Container Apps の UAMI** で Entra ID 認証 (`Cognitive Services OpenAI User` ロール)。Structured Outputs (`response_format=json_schema, strict=true`) 対応モデルをデプロイ |
+| Azure OpenAI / Foundry (Cognitive Services `AIServices`) | Standard (`disableLocalAuth: true`) | GPS 提案と過去ダイブログ分析レポートのモデルホスティング。分析レポートは専用の GPT-5.4 デプロイメントを使用する。`backend/services/location_resolver.py` / `dive_analysis_report.py` から **Container Apps の UAMI** で Entra ID 認証 (`Cognitive Services OpenAI User` ロール)。Structured Outputs (`response_format=json_schema, strict=true`) 対応モデルをデプロイ |
 
 > **Note**:
 > - Key Vault は現在使用していません（マネージド ID + Container App secrets のみで構成）。
-> - Azure OpenAI / Foundry は本ソリューションでは **`rg-divelogsite` 外の既存リソース**（例: `basicAI/maaya-lab`, swedencentral）を参照する運用です。Bicep からは作成せず、`AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` などの環境変数のみを `ca-divelog` に注入し、UAMI `ca-divelog-id` に対する `Cognitive Services OpenAI User` ロール (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) は Azure OpenAI アカウント側のスコープで個別に付与します。
+> - Azure OpenAI / Foundry は本ソリューションでは **`rg-divelogsite` 外の既存リソース**（例: `basicAI/maaya-lab`, swedencentral）を参照する運用です。Bicep からは作成せず、`AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_DEPLOYMENT` / `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT` などの環境変数のみを `ca-divelog` に注入し、UAMI `ca-divelog-id` に対する `Cognitive Services OpenAI User` ロール (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) は Azure OpenAI アカウント側のスコープで個別に付与します。
 
 **リソースグループ**: `rg-divelogsite`（Azure OpenAI / Foundry は別 RG / 別リージョン可）
 
@@ -184,13 +207,12 @@ divelog/
 │   ├── data.py                 # データアクセス層 (Cosmos DB / JSON フォールバック)
 │   ├── services/               # サービス層
 │   │   ├── location_resolver.py # LLM (OpenAI/Azure OpenAI) で GPS 推定 + RAG
+│   │   ├── dive_analysis_report.py # Foundry で過去ログ分析レポート生成
 │   │   ├── gps_diff.py          # haversine + 提案判定 (GPS_DIFF_THRESHOLD_KM)
 │   │   └── location_knowledge.py# Cosmos location_knowledge コンテナアクセス
 │   ├── prompts/                # LLM プロンプトバンドル（コードと分離）
-│   │   └── gps_suggestion/
-│   │       ├── system.md / user_template.md
-│   │       ├── response_schema.json / config.yaml
-│   │       └── README.md
+│   │   ├── gps_suggestion/      # GPS 推定
+│   │   └── dive_analysis/       # 過去ログ分析レポート
 │   ├── requirements.txt        # Python 依存パッケージ
 │   ├── Dockerfile              # コンテナイメージビルド定義
 │   ├── .env.example            # 環境変数サンプル

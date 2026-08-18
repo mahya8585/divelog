@@ -101,10 +101,11 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 | `COSMOS_LOCATION_KNOWLEDGE_CONTAINER` | `location_knowledge` | ロケーション提案の承認/却下ナレッジコンテナ |
 | `COSMOS_USERS_CONTAINER` | `users` | ユーザー認証情報コンテナ名 |
 | `COSMOS_TOKENS_CONTAINER` | `tokens` | 認証トークンコンテナ名（TTL = 10 分） |
-| `LLM_PROVIDER` | `openai` | LLM プロバイダー (`openai` / `azure_openai`)。`backend/services/location_resolver.py` がこの値で実装を切り替えます |
-| `OPENAI_API_KEY` | — | `LLM_PROVIDER=openai` 時に必須。未設定時は GPS 提案がスキップされ、即時 `status=uploaded` で受け付けられます |
-| `AZURE_OPENAI_ENDPOINT` | — | `LLM_PROVIDER=azure_openai` 時に必須。認証は常に UAMI / DefaultAzureCredential を使用し、API キー認証はサポートしない |
-| `AZURE_OPENAI_DEPLOYMENT` | — | Azure OpenAI のデプロイメント名 |
+| `LLM_PROVIDER` | `openai` | LLM プロバイダー (`openai` / `azure_openai`)。GPS 提案と過去ログ分析レポートで共通利用します。本番は `azure_openai` を指定します |
+| `OPENAI_API_KEY` | — | `LLM_PROVIDER=openai` 時のみ使用。本番の Microsoft Foundry 接続では設定しません |
+| `AZURE_OPENAI_ENDPOINT` | — | `LLM_PROVIDER=azure_openai` 時に必須。GPS 提案と分析レポートで共通利用し、認証は常に UAMI / DefaultAzureCredential を使用します |
+| `AZURE_OPENAI_DEPLOYMENT` | — | GPS 提案で使う Microsoft Foundry 上のデプロイメント名 |
+| `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT` | `gpt-5.4` | 過去ログ分析レポート専用のデプロイメント名。Structured Outputs 対応の GPT-5.4 デプロイメントを指定します |
 | `AZURE_OPENAI_API_VERSION` | `2024-10-21` | Azure OpenAI API バージョン |
 | `GPS_DIFF_THRESHOLD_KM` | `25` | 現在 GPS と LLM 提案の距離がこの km 以上の場合に提案を `pending_review` で返却 |
 | `JSON_DIR` | `workflow/json/` | JSON フォールバックディレクトリパス |
@@ -121,7 +122,7 @@ docker run -p 8000:8000 --env-file .env divelog-backend
 |---|---|
 | `flask` | Web フレームワーク |
 | `flask-cors` | CORS 制御 |
-| `flask-limiter` | レート制限（login 5/min, upload 10/min, dives 60/min, default 200/min） |
+| `flask-limiter` | レート制限（login 5/min, upload 10/min, dives 60/min, analysis-report 6/hour, default 200/min） |
 | `gunicorn` | 本番用 WSGI サーバー（`--forwarded-allow-ips "*"`） |
 | `werkzeug` | パスワードハッシュ (PBKDF2) + `ProxyFix` ミドルウェア |
 | `azure-cosmos` | Cosmos DB SDK |

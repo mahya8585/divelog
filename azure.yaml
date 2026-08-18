@@ -18,8 +18,8 @@ services:
     host: containerapp
     language: python
     docker:
-      path: ./backend/Dockerfile
-      context: .          # プロジェクトルートを context にする (workflow/json/ コピーのため)
+      path: ./Dockerfile
+      context: ..         # リポジトリルートを context にする (workflow/json/ コピーのため)
 
   # ── フロントエンド: Vue.js → Azure Static Web Apps ──────
   frontend:

@@ -53,6 +53,9 @@ param azureOpenaiEndpoint string = ''
 @description('Azure OpenAI Deployment')
 param azureOpenaiDeployment string = ''
 
+@description('分析レポート専用 Azure OpenAI Deployment')
+param analysisReportAzureOpenaiDeployment string = 'gpt-5.4'
+
 @description('Azure OpenAI API Version')
 param azureOpenaiApiVersion string = '2024-10-21'
 
@@ -163,6 +166,7 @@ module backend 'modules/containerApp.bicep' = {
     openaiApiKey                : openaiApiKey
     azureOpenaiEndpoint         : azureOpenaiEndpoint
     azureOpenaiDeployment       : azureOpenaiDeployment
+    analysisReportAzureOpenaiDeployment: analysisReportAzureOpenaiDeployment
     azureOpenaiApiVersion       : azureOpenaiApiVersion
     gpsDiffThresholdKm          : gpsDiffThresholdKm
   }

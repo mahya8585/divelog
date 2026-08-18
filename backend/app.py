@@ -90,6 +90,12 @@ except Exception:
     _resolve_gps = None
 
 try:
+    from services.dive_analysis_report import AnalysisReportError, generate_analysis_report
+except Exception:
+    AnalysisReportError = RuntimeError
+    generate_analysis_report = None
+
+try:
     from services.gps_diff import should_suggest as _should_suggest, is_gps_missing as _is_gps_missing
 except Exception:
     _should_suggest = None
@@ -477,6 +483,22 @@ def get_dives():
         "heatmap_data": heatmap_data,
         "markers_data": markers_data,
     })
+
+
+@app.route("/api/analysis-report", methods=["POST"])
+@require_auth
+@limiter.limit("6 per hour")
+def create_analysis_report():
+    if generate_analysis_report is None:
+        return jsonify({"error": "分析レポート機能を初期化できませんでした。"}), 503
+
+    dives = load_all_dives(owner_email=_current_owner())
+    try:
+        report = generate_analysis_report(dives)
+    except AnalysisReportError as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    return jsonify(report)
 
 
 @app.route("/api/dives/upload", methods=["POST"])
