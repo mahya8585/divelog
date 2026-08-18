@@ -345,16 +345,19 @@ async function saveEdit() {
 
   saving.value = true
   try {
+    const currentNormalizedName = editTarget.value.normalized_name
     const result = await updateLocationKnowledge(editTarget.value.normalized_name, {
+      current_name: editTarget.value.name,
       canonical_name: editForm.value.canonical_name.trim(),
       gps_lat: lat,
       gps_lon: lon,
     })
     editSuccess.value = `保存しました（${result.dives_updated ?? 0} 件のダイブログを更新）`
     // ローカル状態を更新してマップを再描画
-    const target = locations.value.find(l => l.normalized_name === editTarget.value.normalized_name)
+    const target = locations.value.find(l => l.normalized_name === currentNormalizedName)
     if (target) {
       target.name             = editForm.value.canonical_name.trim()
+      target.normalized_name  = result.normalized_name
       target.has_knowledge    = true
       target.knowledge_gps_lat = lat
       target.knowledge_gps_lon = lon

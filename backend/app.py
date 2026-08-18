@@ -64,7 +64,7 @@ from data import (
     save_dive,
     save_zxu_upload,
     save_token,
-    update_dives_gps_by_location_name,
+    update_dives_location_by_name,
     update_zxu_upload,
     upsert_location_knowledge_entry,
 )
@@ -824,7 +824,7 @@ _NORM_NAME_RE = re.compile(r"^[\w.\-]{1,200}$")
 @require_auth
 @limiter.limit("30 per minute")
 def put_location_knowledge(norm_name: str):
-    """ロケーション知識の GPS を更新し、同名ダイブの GPS も一括更新する。"""
+    """ロケーション知識と、同名ダイブの名称・GPS を一括更新する。"""
     if not _NORM_NAME_RE.fullmatch(norm_name):
         return jsonify({"error": "Invalid norm_name"}), 400
 
@@ -832,6 +832,13 @@ def put_location_knowledge(norm_name: str):
     canonical_name = (payload.get("canonical_name") or "").strip()
     if not canonical_name:
         return jsonify({"error": "canonical_name が必要です"}), 400
+    current_name = (payload.get("current_name") or "").strip()
+    if not current_name or _normalize_location_name(current_name) != norm_name:
+        return jsonify({"error": "current_name が不正です"}), 400
+
+    new_norm_name = _normalize_location_name(canonical_name)
+    if not new_norm_name or not _NORM_NAME_RE.fullmatch(new_norm_name):
+        return jsonify({"error": "canonical_name が不正です"}), 400
 
     lat_raw = payload.get("gps_lat")
     lon_raw = payload.get("gps_lon")
@@ -845,7 +852,7 @@ def put_location_knowledge(norm_name: str):
 
     try:
         upsert_location_knowledge_entry(
-            norm_name, canonical_name, new_lat, new_lon, owner_email=_current_owner()
+            new_norm_name, canonical_name, new_lat, new_lon, owner_email=_current_owner()
         )
     except LocationKnowledgePermissionError:
         # 他オーナーが先に登録済みのナレッジは上書きさせない（IDOR 防止）
@@ -855,16 +862,16 @@ def put_location_knowledge(norm_name: str):
         return jsonify({"error": "location_knowledge の更新に失敗しました"}), 500
 
     try:
-        dives_updated = update_dives_gps_by_location_name(
-            canonical_name, new_lat, new_lon, owner_email=_current_owner()
+        dives_updated = update_dives_location_by_name(
+            current_name, canonical_name, new_lat, new_lon, owner_email=_current_owner()
         )
     except Exception:
-        app.logger.exception("ダイブ GPS 一括更新に失敗")
+        app.logger.exception("ダイブのロケーション一括更新に失敗")
         dives_updated = 0
 
     return jsonify({
         "updated": True,
-        "normalized_name": norm_name,
+        "normalized_name": new_norm_name,
         "canonical_name": canonical_name,
         "gps_lat": new_lat,
         "gps_lon": new_lon,

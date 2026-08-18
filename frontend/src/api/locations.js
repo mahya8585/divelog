@@ -31,10 +31,10 @@ export async function fetchLocations() {
 }
 
 /**
- * ロケーション知識の GPS を更新する（同名ダイブの GPS も一括更新）
+ * ロケーション知識と同名ダイブの名称・GPSを一括更新する
  * @param {string} normName - 正規化ロケーション名
- * @param {{ canonical_name: string, gps_lat: number, gps_lon: number }} data
- * @returns {Promise<{ updated: boolean, dives_updated: number }>}
+ * @param {{ current_name: string, canonical_name: string, gps_lat: number, gps_lon: number }} data
+ * @returns {Promise<{ updated: boolean, normalized_name: string, dives_updated: number }>}
  */
 export async function updateLocationKnowledge(normName, data) {
   const res = await apiFetch(

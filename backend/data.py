@@ -670,13 +670,14 @@ def upsert_location_knowledge_entry(
         container.upsert_item(doc)
 
 
-def update_dives_gps_by_location_name(
-    location_name: str,
+def update_dives_location_by_name(
+    current_name: str,
+    new_name: str,
     new_lat: float,
     new_lon: float,
     owner_email: str | None = None,
 ) -> int:
-    """指定ロケーション名を持つ全ダイブの GPS を更新する。更新件数を返す。
+    """指定ロケーション名を持つ全ダイブの名称と GPS を更新する。更新件数を返す。
     Cosmos DB 利用時はクエリで対象を絞り upsert する。
     JSON フォールバック時は workflow/json/ 以下のファイルを直接更新する。
     """
@@ -684,7 +685,7 @@ def update_dives_gps_by_location_name(
     if _use_cosmos():
         container = _get_container()
         query = "SELECT * FROM c WHERE c.location.name = @name"
-        params = [{"name": "@name", "value": location_name}]
+        params = [{"name": "@name", "value": current_name}]
         try:
             items = list(container.query_items(
                 query=query,
@@ -692,7 +693,7 @@ def update_dives_gps_by_location_name(
                 enable_cross_partition_query=True,
             ))
         except Exception:
-            _logger.exception("update_dives_gps_by_location_name: Cosmos クエリに失敗")
+            _logger.exception("update_dives_location_by_name: Cosmos クエリに失敗")
             return 0
         for item in items:
             # 書き込み系は「読み取りは緩く、書き込みは厳格に」の原則に従い、
@@ -701,6 +702,7 @@ def update_dives_gps_by_location_name(
             if owner_email and item.get("owner_email") != owner_email:
                 continue
             loc = dict(item.get("location") or {})
+            loc["name"] = new_name
             loc["gps_lat"] = new_lat
             loc["gps_lon"] = new_lon
             item["location"] = loc
@@ -708,14 +710,16 @@ def update_dives_gps_by_location_name(
                 container.upsert_item(item)
                 count += 1
             except Exception:
-                _logger.exception("update_dives_gps_by_location_name: upsert に失敗 id=%s", item.get("id"))
+                _logger.exception("update_dives_location_by_name: upsert に失敗 id=%s", item.get("id"))
     else:
         for path in JSON_DIR.glob("*.json"):
             try:
                 with open(path, encoding="utf-8") as f:
                     dive = json.load(f)
                 loc = dive.get("location") or {}
-                if loc.get("name") == location_name:
+                is_owner = not owner_email or dive.get("owner_email") == owner_email
+                if loc.get("name") == current_name and is_owner:
+                    loc["name"] = new_name
                     loc["gps_lat"] = new_lat
                     loc["gps_lon"] = new_lon
                     dive["location"] = loc
@@ -723,7 +727,7 @@ def update_dives_gps_by_location_name(
                         json.dump(dive, f, ensure_ascii=False, indent=2)
                     count += 1
             except Exception:
-                _logger.exception("update_dives_gps_by_location_name: ファイル更新に失敗 path=%s", path)
+                _logger.exception("update_dives_location_by_name: ファイル更新に失敗 path=%s", path)
     return count
 
 

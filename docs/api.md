@@ -564,7 +564,7 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 
 ## `PUT /api/locations/knowledge/<norm_name>`
 
-ロケーションの GPS を更新する。`location_knowledge` コンテナを更新し、同一ロケーション名を持つ全ダイブの GPS も一括更新する。
+ロケーションの表示名と GPS を更新する。`location_knowledge` コンテナを更新し、`current_name` と同じロケーション名を持つ認証ユーザー所有の全ダイブについて、表示名と GPS を一括更新する。
 
 ### パスパラメータ
 
@@ -576,6 +576,7 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 
 ```json
 {
+  "current_name": "青の洞窟",
   "canonical_name": "青の洞窟",
   "gps_lat": 26.3950,
   "gps_lon": 127.8560
@@ -584,7 +585,8 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `canonical_name` | string | ロケーション表示名（必須） |
+| `current_name` | string | 更新前のロケーション表示名（必須）。正規化した値がパスの `norm_name` と一致する必要があります。 |
+| `canonical_name` | string | 更新後のロケーション表示名（必須） |
 | `gps_lat` | number | 緯度 [-90, 90]（必須） |
 | `gps_lon` | number | 経度 [-180, 180]（必須） |
 
@@ -604,13 +606,14 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 | フィールド | 説明 |
 |---|---|
 | `updated` | 更新が成功したか |
-| `dives_updated` | GPS を更新したダイブ本数 |
+| `normalized_name` | 更新後の表示名を正規化したロケーション名 |
+| `dives_updated` | 表示名と GPS を更新したダイブ本数 |
 
 ### エラーレスポンス
 
 | ステータス | 説明 |
 |---|---|
-| `400 Bad Request` | `norm_name` が無効、`canonical_name` が空、GPS 値が範囲外 |
+| `400 Bad Request` | `norm_name` が無効、`current_name` がパスと不一致、`canonical_name` が無効、GPS 値が範囲外 |
 | `401 Unauthorized` | トークンが無効または未指定 |
 | `403 Forbidden` | 同じ正規化名を別ユーザが先に登録している（`location_knowledge` のクロスオーナー上書き拒否 / IDOR 防止） |
 | `429 Too Many Requests` | レート制限超過（30 回/分） |
