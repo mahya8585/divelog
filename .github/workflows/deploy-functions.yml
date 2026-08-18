@@ -125,10 +125,6 @@ jobs:
             echo "Failed to acquire the Azure management token."
             exit "${pipeline_status[0]}"
           fi
-          if [ "${pipeline_status[1]}" -ne 0 ]; then
-            echo "Azure Functions Core Tools failed to publish the package."
-            exit "${pipeline_status[1]}"
-          fi
 
           package_modified_after=$(az storage blob show \
             --account-name "$storage_account" \
@@ -139,7 +135,14 @@ jobs:
             --output tsv)
           if [ -z "$package_modified_after" ] || [ "$package_modified_before" = "$package_modified_after" ]; then
             echo "The Functions deployment package was not updated."
+            if [ "${pipeline_status[1]}" -ne 0 ]; then
+              exit "${pipeline_status[1]}"
+            fi
             exit 1
+          fi
+
+          if [ "${pipeline_status[1]}" -ne 0 ]; then
+            echo "Core Tools returned ${pipeline_status[1]} after package upload; validating the deployment with ARM trigger sync."
           fi
 
           function_app_id=$(az functionapp show \

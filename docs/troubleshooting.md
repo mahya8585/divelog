@@ -12,6 +12,32 @@
 
 ---
 
+## 2026-08-18: Functions の ZIP 公開成功後に host status 403 で Actions が失敗
+
+### 日付
+
+2026-08-18
+
+### 事象
+
+GitHub Actions の `Deploy Functions` で Oryx リモートビルドと `released-package.zip` のアップロードが完了し、Azure のデプロイ記録も成功になった後、Core Tools が `https://func-divelog.azurewebsites.net/admin/host/status` の HTTP 403 (`IP Forbidden`) を受けてジョブを失敗させた。
+
+### 原因
+
+Function App は Cosmos Change Feed Trigger 専用で HTTP Trigger を持たないため、メインサイトを `ipSecurityRestrictionsDefaultAction=Deny` で意図的に閉じている。Core Tools はパッケージ公開後にもメインサイトの host status を確認するため、このセキュリティ設定ではデプロイ成功後の確認だけが 403 になる。ワークフローは Core Tools の非ゼロ終了をパッケージ更新確認より先に処理していたため、用意していた ARM `syncfunctiontriggers` による検証へ到達しなかった。
+
+### 修正対応
+
+Core Tools の終了コードが非ゼロでも直ちに失敗させず、`app-package/released-package.zip` の更新を確認するよう `deploy-functions.yml` を修正した。パッケージが更新済みの場合は ARM `syncfunctiontriggers` を実行し、その成否をデプロイの最終判定にする。パッケージが更新されていない場合は Core Tools の終了コードで失敗させる。
+
+### 長期修正計画とその進捗
+
+- **完了**: メインサイトの全拒否と SCM のデプロイ許可を維持し、host status 確認のために公開アクセスを広げない。
+- **完了**: ZIP の更新と ARM trigger sync を、HTTP Trigger を持たない Function App のデプロイ成功条件として使用する。
+- **運用**: Core Tools の終了コードだけで公開失敗と判断せず、Azure のデプロイ記録、パッケージ更新時刻、trigger sync の結果を併せて確認する。
+
+---
+
 ## 2026-08-18: Functions デプロイが Storage 403 で再失敗
 
 ### 日付
