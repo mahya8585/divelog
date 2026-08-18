@@ -342,7 +342,7 @@ divelog/
 - **ナビゲーションガード**: 未認証ユーザーは `/login` にリダイレクト。ログイン後は元のアクセス先へ復帰（`?redirect=` クエリパラメータ経由）
 - **認証バイパス**: `AUTH_DISABLED=true` は **`FLASK_DEBUG=true` が同時に設定されている場合のみ有効**。本番で誤って設定した場合は **サーバー起動時に `RuntimeError` を携出して起動を失敗**させる（サイレントにバイパスさせない fail-start）
 - **リソースオーナースコープによる認可**: 認証成功時に `flask.g.current_email` にログインユーザーの email を保持し、`/api/dives*` の全 API から `owner_email` としてデータ層に伝携する。Cosmos DB 側では `WHERE NOT IS_DEFINED(c.owner_email) OR c.owner_email = @owner` でクエリし、他ユーザーのドキュメントは読み取り・更新ともに不可となる（IDOR 防止）。Functions の Change Feed 処理でも `zxu_uploads` の `owner_email` を `dives` ドキュメントにコピーしてエンドツーエンドでオーナーを呼証する。`location_knowledge` コンテナも同様に `owner_email` を埋め込み、`/api/locations` は「自分のナレッジ + owner_email 未設定の旧データ」のみを返し、`PUT /api/locations/knowledge/...` は別オーナーが登録したエントリの上書きを 403 で拒否する（クロスオーナー汚染防止）。
-- **ロケーション一括編集**: `PUT /api/locations/knowledge/{normalized_name}` は、更新前の表示名を正規化してパスと照合したうえで、認証ユーザーが所有し、その表示名と完全一致する `dives` ドキュメントだけを対象に `location.name` と GPS を一括更新する。名称変更後の正規化名で `location_knowledge` を upsert し、一覧の再取得でも変更後の名称と GPS を参照できるようにする。
+- **ロケーション一括編集**: `PUT /api/locations/knowledge/{normalized_name}` は、更新前の表示名が指定されれば正規化してパスと照合し、省略時は認証ユーザー所有のダイブログから正規化名が一致する表示名を解決する。その表示名と完全一致する `dives` ドキュメントだけを対象に `location.name` と GPS を一括更新する。名称変更後の正規化名で `location_knowledge` を upsert し、一覧の再取得でも変更後の名称と GPS を参照できるようにする。
 - **GPS 提案承認の入力境界**: `POST /api/dives/uploads/{upload_id}/confirm` で `accept=true` のために適用される GPS は常に `zxu_uploads.gps_suggestion.suggested_lat/lon`（サーバが保存した LLM 提案値）のみで、クライアントが送付した任意座標は採用しない。これにより `dives.location.gps_source="suggested_by_llm"` とされる座標は LLM 出力値に限定され、`dive_knowledge_processor` 経由での `location_knowledge` 汚染を防ぐ。
 
 ### アプリケーションセキュリティ

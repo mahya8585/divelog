@@ -833,8 +833,19 @@ def put_location_knowledge(norm_name: str):
     if not canonical_name:
         return jsonify({"error": "canonical_name が必要です"}), 400
     current_name = (payload.get("current_name") or "").strip()
-    if not current_name or _normalize_location_name(current_name) != norm_name:
+    if current_name and _normalize_location_name(current_name) != norm_name:
         return jsonify({"error": "current_name が不正です"}), 400
+    if not current_name:
+        current_name = next(
+            (
+                (d.get("location") or {}).get("name", "").strip()
+                for d in load_all_dives(owner_email=_current_owner())
+                if _normalize_location_name((d.get("location") or {}).get("name")) == norm_name
+            ),
+            "",
+        )
+    if not current_name:
+        return jsonify({"error": "ロケーションが見つかりません"}), 404
 
     new_norm_name = _normalize_location_name(canonical_name)
     if not new_norm_name or not _NORM_NAME_RE.fullmatch(new_norm_name):

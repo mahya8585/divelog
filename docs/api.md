@@ -585,7 +585,7 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `current_name` | string | 更新前のロケーション表示名（必須）。正規化した値がパスの `norm_name` と一致する必要があります。 |
+| `current_name` | string | 更新前のロケーション表示名（任意）。指定時は、正規化した値がパスの `norm_name` と一致する必要があります。省略時は認証ユーザーのダイブログから解決します。 |
 | `canonical_name` | string | 更新後のロケーション表示名（必須） |
 | `gps_lat` | number | 緯度 [-90, 90]（必須） |
 | `gps_lon` | number | 経度 [-180, 180]（必須） |
@@ -613,8 +613,9 @@ GPS 提案の承認/却下を送信する。Cosmos DB 利用時のみ有効（�
 
 | ステータス | 説明 |
 |---|---|
-| `400 Bad Request` | `norm_name` が無効、`current_name` がパスと不一致、`canonical_name` が無効、GPS 値が範囲外 |
+| `400 Bad Request` | `norm_name` が無効、指定した `current_name` がパスと不一致、`canonical_name` が無効、GPS 値が範囲外 |
 | `401 Unauthorized` | トークンが無効または未指定 |
 | `403 Forbidden` | 同じ正規化名を別ユーザが先に登録している（`location_knowledge` のクロスオーナー上書き拒否 / IDOR 防止） |
+| `404 Not Found` | `current_name` 省略時に、認証ユーザーのダイブログから対象ロケーションを解決できない |
 | `429 Too Many Requests` | レート制限超過（30 回/分） |
 | `500 Internal Server Error` | `location_knowledge` の保存に失敗 |
