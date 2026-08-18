@@ -352,8 +352,10 @@ async function loadReport() {
     } catch (e) {
       aiError.value = e.message || '保存済みレポートの取得に失敗しました。'
     }
+    loading.value = false
     await nextTick()
     aggregateData()
+    return
   }
   loading.value = false
 }
