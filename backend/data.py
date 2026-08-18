@@ -115,13 +115,9 @@ def _get_location_knowledge_container():
 
 
 def _get_analysis_reports_container():
-    from azure.cosmos import PartitionKey
     client = _get_cosmos_client()
     db = client.get_database_client(COSMOS_DATABASE)
-    return db.create_container_if_not_exists(
-        id=COSMOS_ANALYSIS_REPORTS_CONTAINER,
-        partition_key=PartitionKey(path="/owner_email"),
-    )
+    return db.get_container_client(COSMOS_ANALYSIS_REPORTS_CONTAINER)
 
 
 def _load_all_from_cosmos(owner_email: str | None = None) -> list[dict]:

@@ -69,7 +69,7 @@ npm run preview # ビルド結果をローカル確認
 2. `/analysis` を開き、最深水深・最低水温・最長潜水時間、エリア別・月別グラフを確認する。この時点では Foundry を呼び出さない。
 3. 「レポートの作り直し」を押し、エリア傾向・利用者傾向・おすすめスポットが生成されることを確認する。
 4. `/analysis` を再読み込みし、前回生成したレポートが表示されることを確認する。Cosmos 未設定の JSON フォールバック環境ではレポートを永続化しない。
-5. エリア別潜水本数の棒を押し、一覧画面でその棒に含まれるログだけが表示されることを確認する。
+5. エリア別潜水本数の棒を押し、グラフ直下にその棒に含まれるログだけが表示され、各行から詳細画面へ移動できることを確認する。
 
 Foundry の実呼び出しには `LLM_PROVIDER=azure_openai`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_VERSION` と、分析用の `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT=gpt-5.4` を設定する。ローカルでは `az login` したユーザーに対象 Foundry アカウントの `Cognitive Services OpenAI User` が必要である。ブラウザから Foundry を直接呼び出さない。
 

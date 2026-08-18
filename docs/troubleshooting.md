@@ -12,6 +12,32 @@
 
 ---
 
+## 2026-08-18: 分析レポート生成後の Cosmos DB 保存が 403 で失敗
+
+### 日付
+
+2026-08-18
+
+### 事象
+
+分析ページで「レポートの作り直し」を押すと Microsoft Foundry による生成は完了するが、`POST /api/analysis-report` が「分析レポートの保存に失敗しました。」を返した。
+
+### 原因
+
+本番 Cosmos DB の `divelog` データベースに、IaCへ追加済みの `analysis_reports` コンテナがまだ反映されていなかった。バックエンドは存在しないコンテナを `create_container_if_not_exists` でデータプレーンから作成しようとしたが、Cosmos DB アカウントではコンテナ作成をARM経由に限定しているため、`Operation 'POST' on resource 'colls' is not allowed through Azure Cosmos DB endpoint` の403になった。
+
+### 修正対応
+
+ARM経由で `analysis_reports` コンテナを作成し、パーティションキーをIaC定義どおり `/owner_email` に設定した。バックエンドはコンテナを実行時作成せず、IaCでプロビジョニング済みのコンテナクライアントを取得するよう変更した。Container AppのUAMIによるEntra ID認証とCosmos DBデータロールは維持した。
+
+### 長期修正計画とその進捗
+
+- **完了**: `analysis_reports` を `infra/modules/cosmosDb.bicep` で管理し、アプリ起動時のリソース作成に依存しない。
+- **完了**: コンテナのパーティションキー `/owner_email` と固定ID `latest` による所有者単位の保存を維持する。
+- **運用**: 新しいCosmos DBコンテナをコードより先に本番へ反映し、ARM上の存在とパーティションキーをデプロイ後に確認する。
+
+---
+
 ## 2026-08-18: Functions の ZIP 公開成功後に host status 403 で Actions が失敗
 
 ### 日付

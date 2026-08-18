@@ -80,6 +80,31 @@
         </div>
       </div>
 
+      <div v-if="selectedArea" class="report-card mb-4">
+        <div class="selected-area-header">
+          <div>
+            <div class="section-title mb-1">{{ selectedArea }} のダイブログ</div>
+            <div class="text-muted small">{{ selectedAreaDives.length }} 件</div>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" title="一覧を閉じる" @click="selectedArea = ''">
+            <i class="bi bi-x-lg" aria-hidden="true"></i>
+            <span class="visually-hidden">一覧を閉じる</span>
+          </button>
+        </div>
+        <div class="selected-dive-list">
+          <router-link
+            v-for="dive in selectedAreaDives"
+            :key="dive.dive_id"
+            :to="`/dive/${dive.dive_id}`"
+            class="selected-dive-item"
+          >
+            <span class="selected-dive-date">{{ formatDateTime(dive.dive_info?.datetime) }}</span>
+            <span class="selected-dive-location">{{ dive.location?.name || 'ロケーション未登録' }}</span>
+            <i class="bi bi-chevron-right" aria-hidden="true"></i>
+          </router-link>
+        </div>
+      </div>
+
       <div class="row g-4 mb-4">
         <div class="col-lg-6">
           <div class="report-card h-100">
@@ -124,8 +149,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, nextTick, onMounted } from 'vue'
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js'
 import { fetchAnalysisReport, fetchDives, generateAnalysisReport } from '../api/dives.js'
 import LoadingIndicator from '../components/LoadingIndicator.vue'
@@ -133,7 +157,6 @@ import LoadingIndicator from '../components/LoadingIndicator.vue'
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 const dives = ref([])
-const router = useRouter()
 const loading = ref(true)
 const error = ref('')
 const generating = ref(false)
@@ -141,6 +164,10 @@ const aiError = ref('')
 const aiReport = ref(null)
 const areaChartRef = ref(null)
 const monthChartRef = ref(null)
+const selectedArea = ref('')
+const selectedAreaDives = computed(() =>
+  dives.value.filter((dive) => getArea(dive.location?.name) === selectedArea.value)
+)
 
 const maxDepthLabel = ref('—')
 const minTempLabel = ref('—')
@@ -283,7 +310,7 @@ function aggregateData() {
     areaEntries.map(([name]) => name),
     areaEntries.map(([, count]) => count),
     '#0ea5e9',
-    (area) => router.push({ path: '/', query: { area } }),
+    (area) => { selectedArea.value = area },
   )
 
   const monthMap = new Map(Array.from({ length: 12 }, (_, i) => [i + 1, 0]))
@@ -395,9 +422,61 @@ onMounted(() => {
   border-bottom: 1px solid #e2e8f0;
 }
 
+.selected-area-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.selected-dive-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.selected-dive-item {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.7fr) minmax(0, 1.3fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: #0f172a;
+  text-decoration: none;
+}
+
+.selected-dive-item:hover,
+.selected-dive-item:focus-visible {
+  border-color: #0ea5e9;
+  background: #f0f9ff;
+}
+
+.selected-dive-date {
+  font-weight: 700;
+}
+
+.selected-dive-location {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #475569;
+}
+
 .chart-wrap {
   position: relative;
   height: 320px;
+}
+
+@media (max-width: 575.98px) {
+  .selected-dive-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .selected-dive-location {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
 }
 
 .area-list,
