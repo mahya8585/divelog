@@ -11,7 +11,7 @@
 ## 1. リソースグループの作成
 
 ```bash
-az group create -n rg-divelogsite -l japaneast
+az group create -n rg-divelogsite -l japanwest
 ```
 
 ---
@@ -96,6 +96,50 @@ az deployment group create \
 # または azd を使用
 azd deploy backend
 ```
+
+### コードのみ更新する場合
+
+既存リソースの構成を変えず、バックエンドコードとプロンプトだけを更新する場合は、最初に IaC の差分を確認する。
+
+```bash
+azd provision --preview
+```
+
+preview に Storage の公開アクセス有効化、Cosmos DB のフェールオーバー設定解除、ローカル認証の有効化など、現在のセキュリティ・可用性を後退させる変更が含まれる場合は provision を実行しない。ACR remote buildでイメージを作成し、既存Container Appのイメージだけを更新する。
+
+```bash
+az acr build \
+  --registry acrdivelog \
+  --image backend:<tag> \
+  --file backend/Dockerfile .
+
+az containerapp update \
+  --resource-group rg-divelogsite \
+  --name ca-divelog \
+  --image acrdivelog.azurecr.io/backend:<tag>
+```
+
+`backend/Dockerfile` はリポジトリルートをビルドコンテキストとするため、`azure.yaml` でもサービスディレクトリから見た `docker.path: ./Dockerfile` と `context: ..` を維持する。ローカルDockerのパッケージ取得がTLSエラーになる場合も、依存関係や証明書検証を弱めずACR remote buildを使う。
+
+分析レポートを GPT-5.4 へ固定する本番設定:
+
+```bash
+az containerapp update \
+  --resource-group rg-divelogsite \
+  --name ca-divelog \
+  --set-env-vars \
+    ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT=gpt-5.4
+```
+
+この設定はGPS提案用の `AZURE_OPENAI_DEPLOYMENT` と分離する。FoundryはAPIキーを使わず、Container AppのUAMI `ca-divelog-id` に `Cognitive Services OpenAI User` を割り当てて呼び出す。
+
+反映後は次を確認する。
+
+1. 新しいContainer App revisionが `Running` かつ `Succeeded` である。
+2. `GET /health` が `200` を返す。
+3. 未認証の `POST /api/analysis-report` が `401` を返す。
+4. 認証後に「レポートの作り直し」が GPT-5.4 の strict JSON Schema応答を表示する。
+5. フロントエンドを変更した場合は、本番bundleに「エリア別潜水本数」などの新しい表示文言が含まれ、旧文言が残っていない。
 
 ---
 

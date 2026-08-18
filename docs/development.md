@@ -63,6 +63,24 @@ npm run build   # dist/ に出力
 npm run preview # ビルド結果をローカル確認
 ```
 
+### 分析レポートのローカル確認
+
+1. バックエンドとフロントエンドを起動してログインする。
+2. `/analysis` を開き、最深水深・最低水温・最長潜水時間、エリア別・月別グラフを確認する。この時点では Foundry を呼び出さない。
+3. 「レポートの作り直し」を押し、エリア傾向・利用者傾向・おすすめスポットが生成されることを確認する。
+
+Foundry の実呼び出しには `LLM_PROVIDER=azure_openai`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_VERSION` と、分析用の `ANALYSIS_REPORT_AZURE_OPENAI_DEPLOYMENT=gpt-5.4` を設定する。ローカルでは `az login` したユーザーに対象 Foundry アカウントの `Cognitive Services OpenAI User` が必要である。ブラウザから Foundry を直接呼び出さない。
+
+変更後の最小検証:
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\services\dive_analysis_report.py
+Set-Location frontend
+npm run build
+```
+
+エリア抽出は `伊豆 : 富戸` → `伊豆`、`沖縄：慶良間` → `沖縄`、コロンなし → `不明` を確認する。測定値については、`0` のログが平均・代表値から除外される一方、総本数とエリア本数には残ることを確認する。
+
 ---
 
 ## Docker（バックエンドのみ）
