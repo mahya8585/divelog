@@ -11,13 +11,13 @@ size: 16:9
 
 divelog — Python ユーザー向け 5 分 LT
 
-<!-- 目安: 20秒。ダイブコンピュータのログが、どうやって地図の上に載るのかを紹介します。 -->
+<!-- 目安: 15秒。ダイブコンピュータのログが、どうやって地図の上に載るのかを紹介します。 -->
 
 ---
 
 ![bg fit](https://github.com/user-attachments/assets/584b270c-7487-41d7-a059-2bbe95e78d3a)
 
-<!-- 目安: 20秒。参考画像を使った自己紹介。必要に応じて画像を差し替えてください。 -->
+<!-- 目安: 15秒。参考画像を使った自己紹介。必要に応じて画像を差し替えてください。 -->
 
 ---
 
@@ -29,29 +29,47 @@ divelog — Python ユーザー向け 5 分 LT
 
 **生ログ → 整った JSON → 次のダイブの地図**
 
-<!-- 目安: 35秒。紙のログブックを、検索できて地図にも出るデータにするアプリです。 -->
+<!-- 目安: 25秒。紙のログブックを、検索できて地図にも出るデータにするアプリです。 -->
 
 ---
 
-## 全体の流れ — 重い変換はアップロードの後で
+## 全体フロー — 同期受付と非同期変換を分離
 
 ```text
-ブラウザ (Vue) ── ZXU ──> Flask API
-                              │ LOCATION を先に抽出
-                              ├─ 必要なら GPS 候補をユーザー確認
-                              ▼
-                         Cosmos DB: zxu_uploads
-                              │ Change Feed
-                              ▼
-                    Azure Functions (Python)
-                    ZXU → JSON → dives に保存
-                              │
-                              └──> Vue + Leaflet で地図表示
+Vue SPA                  Flask API              Cosmos DB             Functions
+  │ POST /api/dives/upload  │                       │                     │
+  ├── .zxu ────────────────>│ LOCATION を抽出       │                     │
+  │                         │ owner別 knowledge検索 │                     │
+  │                         │ → 必要なら GPS 提案   │                     │
+  │<── 202 pending_review ──┤                       │                     │
+  │ POST /api/dives/uploads/{id}/confirm            │                     │
+  │ (accept / reject) ─────>│ status=confirmed      │                     │
+  │                         │ status=uploaded       │                     │
+  │                         ├─ raw ZXU + owner + status ────────>│ zxu_uploads
+  │                         │                       │   pending_reviewは  │
+  │                         │                       │   confirmまで保留    │
+  │                         │                       ├─ Change Feed ──────>│
+  │                         │                       │ zxu_change_feed_processor
+  │                         │                       │ zxu_uploads_leases   │
+  │                         │                       │          parse/clean│
+  │                         │                       │<── upsert ──────────┤ dives
+  │                         │                       │<── processed/failed ┤
+  │                         │                       ├─ dives Change Feed >│
+  │                         │                       │ dive_knowledge_processor
+  │                         │                       │ dives_leases        │
+  │                         │                       │       suggested GPS │
+  │                         │                       │       のみ学習      │
+  │                         │                       │<── upsert ──────────┤
+  │                         │                       │  location_knowledge
+  │ GET /api/dives ────────>│                       │                     │
+  │<── dives + map data ────┤<──────────────────────┤                     │
+  └── Leaflet: markers / heatmap
 ```
 
-- 先に場所の確認、全データ変換は非同期に。アップロード画面を変換完了まで待たせない
+- `uploaded` / `confirmed` のみ変換。承認時だけ `gps_override` を適用し、`gps_source` を記録
+- GPS 提案は現在値が `(0,0)` または候補との差が既定 25 km 以上の場合
 
-<!-- 目安: 45秒。GPS 提案があれば人が確認し、その後 Functions が本変換します。 -->
+<!-- 目安: 55秒。変更フィードには lease によるチェックポイントがあり、Functions が非同期に変換します。二段目の学習処理は LLM 提案由来の地点だけを対象にします。 -->
 
 ---
 
@@ -69,7 +87,7 @@ ZXU は **パイプ区切り + セクション + XML + 独自 KV** の合わせ�
 "GPS=[26.6,127.8]" → gps_lat / gps_lon
 ```
 
-<!-- 目安: 55秒。Python 標準の文字列処理・正規表現・datetime・pathlib を活かし、XML だけ専用ライブラリに任せています。 -->
+<!-- 目安: 45秒。Python 標準の文字列処理・正規表現・datetime・pathlib を活かし、XML だけ専用ライブラリに任せています。 -->
 
 ---
 
@@ -82,23 +100,40 @@ ZXU は **パイプ区切り + セクション + XML + 独自 KV** の合わせ�
 
 ダイブログは「入力データ」でもあり、ユーザー由来の**信頼できないデータ**。
 
-<!-- 目安: 55秒。安全性・欠損耐性・待ち時間の3点が、この変換フローの肝です。 -->
+<!-- 目安: 45秒。安全性・欠損耐性・待ち時間の3点が、この変換フローの肝です。 -->
 
 ---
 
-## Leaflet：ログに「どこで潜った？」を足す
+## Leaflet とは — 地図を組み立てる JavaScript ライブラリ
+
+- ブラウザで操作できる地図 UI の土台：地図ビュー、ズーム、イベント
+- タイル・マーカー・図形・Popup などを **Layer** として重ねて表示
+- 地図データそのものは提供しない。タイル提供元と座標データは別に用意
+- プラグインで機能を拡張できる。divelog は `leaflet.heat` で密度表示
+
+```text
+OpenStreetMap タイル + dives の緯度経度
+                    ↓
+          Leaflet map + marker layer
+                    + leaflet.heat layer
+```
+
+<!-- 目安: 30秒。Leaflet は地図画像や地点情報のデータベースではなく、地図とレイヤーをブラウザで操作するライブラリです。 -->
+
+---
+
+## なぜ Leaflet？ — 採用理由と使ってみた感触
 
 - Vue に npm で同梱。CDN なしで厳格な CSP と共存
-- 小さくシンプルな API：タイル地図にマーカーと `leaflet.heat` を重ねる
-- 地図タイルは OpenStreetMap、ログの地点・件数はアプリのデータ
+- 軽量で API がシンプル。既存の Vue 画面に地図を足しやすい
 
 **使ってみての学び**
 
-- レイヤーの追加・更新が素直で、地点と密度を同じ地図に載せやすい
+- マーカーとヒートレイヤーを別々に更新でき、地点と密度を同じ地図に載せやすい
 - SPA では地図を作るだけで終わらない。画面を離れるときに `remove()` する
 - Popup は HTML として解釈されるため、ログ由来の地名をエスケープ
 
-<!-- 目安: 45秒。地図表示そのものは手軽。でも Vue のライフサイクルと安全な Popup 表示は忘れずに。 -->
+<!-- 目安: 30秒。地図表示そのものは手軽。でも Vue のライフサイクルと安全な Popup 表示は忘れずに。 -->
 
 ---
 
@@ -110,4 +145,4 @@ ZXU は **パイプ区切り + セクション + XML + 独自 KV** の合わせ�
 
 次のダイブのあとも、ログはちゃんと地図に帰ってくる。🌊
 
-<!-- 目安: 25秒。合計約5分。質問を一つ受けられる余白を残します。 -->
+<!-- 目安: 15秒。説明は約4分35秒、切り替えや質疑の余白を含めて5分です。 -->
