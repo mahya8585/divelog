@@ -77,30 +77,44 @@ Vue SPA                  Flask API              Cosmos DB             Functions
 
 ZXU は **パイプ区切り + セクション + XML + 独自 KV** の合わせ技。
 
-1. `ZAR` / `ZDH` / `ZDP` を文字列として切り出す
-2. `ZAR` 内の XML は `defusedxml` で安全に解析
-3. `LOCATION` などの `KEY=value` は正規表現で辞書化
-4. 日時・数値・単位を整えて、一定の JSON 形にまとめる
+`LOCATION` 等の KV は、カンマ区切り。でも `[...]` 内のカンマは値の一部。
 
-```text
-"011400" → 74.0 分     "Maaya¶Ishida" → "Maaya Ishida"
-"GPS=[26.6,127.8]" → gps_lat / gps_lon
+```python
+result = {}
+pattern = r"(\w+)=(?:\[([^\]]*)\]|([^,]*))"
+for match in re.finditer(pattern, s):
+    key = match.group(1)
+    result[key] = (
+        match.group(2) if match.group(2) is not None else match.group(3)
+    )
 ```
 
-<!-- 目安: 45秒。Python 標準の文字列処理・正規表現・datetime・pathlib を活かし、XML だけ専用ライブラリに任せています。 -->
+`GPS=[26.6,127.8],LOCNAME=[沖縄: ゴリラチョップ]` → GPS と地名を別々に抽出
+
+<!-- 目安: 45秒。実装の _parse_kv_string から抜粋。角括弧の有無で値の取り方を分け、ブラケット内のカンマや空白も保持します。 -->
 
 ---
 
-## 工夫したところ — 失敗を「静かに正しく」扱う
+## 工夫したところ — 入力の揺れを安全に受け止める
 
-- **全部を XML と決めつけない**：形式ごとにパーサーを分け、入力の境界を保つ
-- **欠損・変換不能値は `None`**：不正な数値をそれらしく見せない
-- **`defusedxml` を必須化**：外部エンティティ等を狙う XML を標準 XML パーサーに渡さない
-- **場所だけ先読み**：GPS 提案に必要な `LOCATION` 抽出と全件変換を分離
+**数値化できない値をゼロ扱いせず、`None` にする**
+
+```python
+def _float(val):
+    if val is None or str(val).strip() == "":
+        return None
+    try:
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return None
+```
+
+- XML は必須依存 `defusedxml` で解析。プロファイルは必須項目が欠けた行をスキップ
+- GPS 提案には `LOCATION` だけ先読みし、全件変換は承認後に非同期で実行
 
 ダイブログは「入力データ」でもあり、ユーザー由来の**信頼できないデータ**。
 
-<!-- 目安: 45秒。安全性・欠損耐性・待ち時間の3点が、この変換フローの肝です。 -->
+<!-- 目安: 45秒。実装の _float から抜粋。欠損や不正値をゼロに化けさせず、セクション別に処理し、XML は安全なパーサーに限定します。 -->
 
 ---
 
